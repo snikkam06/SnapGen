@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ──────────────────────────────────────────
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  clerkUserId     String    @unique @map("clerk_user_id")
+  email           String    @unique
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
+  fullName        String?   @map("full_name")
+  avatarUrl       String?   @map("avatar_url")
+  role            String    @default("user")
+  status          String    @default("active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  oauthAccounts   OauthAccount[]
+  subscription    Subscription?
+  creditLedgers   CreditLedger[]
+  characters      Character[]
+  assets          Asset[]
+  generationJobs  GenerationJob[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+// ─── OAuth Accounts ─────────────────────────────────
+model OauthAccount {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  provider          String
+  providerAccountId String   @map("provider_account_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("oauth_accounts")
+}
+
+// ─── Subscriptions ──────────────────────────────────
+model Subscription {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @unique @map("user_id") @db.Uuid
+  stripeCustomerId     String    @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?   @unique @map("stripe_subscription_id")
+  planCode             String    @default("free") @map("plan_code")
+  status               String    @default("inactive")
+  currentPeriodEnd     DateTime? @map("current_period_end") @db.Timestamptz
+  cancelAtPeriodEnd    Boolean   @default(false) @map("cancel_at_period_end")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+// ─── Credit Ledger ──────────────────────────────────
+model CreditLedger {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  amount        Int
+  entryType     String   @map("entry_type")
+  reason        String
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("credit_ledgers")
+}
+
+// ─── Plans ──────────────────────────────────────────
+model Plan {
+  id               String   @id @default(uuid()) @db.Uuid
+  code             String   @unique
+  name             String
+  monthlyPriceCents Int     @map("monthly_price_cents")
+  monthlyCredits   Int      @map("monthly_credits")
+  isActive         Boolean  @default(true) @map("is_active")
+  featuresJson     Json     @default("{}") @map("features_json")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("plans")
+}
+
+// ─── Characters ─────────────────────────────────────
+model Character {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  name          String
+  slug          String
+  characterType String    @map("character_type")
+  status        String    @default("draft")
+  coverAssetId  String?   @map("cover_asset_id") @db.Uuid
+  latestModelId String?   @map("latest_model_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  datasets       CharacterDataset[]
+  models         CharacterModel[]
+  generationJobs GenerationJob[]
+
+  @@unique([userId, slug])
+  @@map("characters")
+}
+
+// ─── Character Datasets ─────────────────────────────
+model CharacterDataset {
+  id               String   @id @default(uuid()) @db.Uuid
+  characterId      String   @map("character_id") @db.Uuid
+  status           String   @default("uploaded")
+  imageCount       Int      @default(0) @map("image_count")
+  qualityScore     Decimal? @map("quality_score") @db.Decimal(5, 2)
+  validationReport Json     @default("{}") @map("validation_report")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@map("character_datasets")
+}
+
+// ─── Character Models ───────────────────────────────
+model CharacterModel {
+  id              String   @id @default(uuid()) @db.Uuid
+  characterId     String   @map("character_id") @db.Uuid
+  provider        String
+  externalModelId String?  @map("external_model_id")
+  modelType       String   @map("model_type")
+  versionTag      String   @map("version_tag")
+  status          String   @default("queued")
+  metadataJson    Json     @default("{}") @map("metadata_json")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@map("character_models")
+}
+
+// ─── Style Packs ────────────────────────────────────
+model StylePack {
+  id               String   @id @default(uuid()) @db.Uuid
+  name             String
+  slug             String   @unique
+  description      String?
+  thumbnailAssetId String?  @map("thumbnail_asset_id") @db.Uuid
+  baseCost         Int      @default(0) @map("base_cost")
+  configJson       Json     @default("{}") @map("config_json")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  generationJobs GenerationJob[]
+
+  @@map("style_packs")
+}
+
+// ─── Assets ─────────────────────────────────────────
+model Asset {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  kind             String
+  storageBucket    String   @map("storage_bucket")
+  storageKey       String   @map("storage_key")
+  mimeType         String   @map("mime_type")
+  fileSizeBytes    BigInt   @map("file_size_bytes")
+  width            Int?
+  height           Int?
+  durationSec      Decimal? @map("duration_sec") @db.Decimal(10, 2)
+  checksum         String?
+  moderationStatus String   @default("pending") @map("moderation_status")
+  metadataJson     Json     @default("{}") @map("metadata_json")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobAssets JobAsset[]
+
+  @@map("assets")
+}
+
+// ─── Generation Jobs ────────────────────────────────
+model GenerationJob {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  characterId     String?   @map("character_id") @db.Uuid
+  stylePackId     String?   @map("style_pack_id") @db.Uuid
+  jobType         String    @map("job_type")
+  status          String    @default("queued")
+  prompt          String?
+  negativePrompt  String?   @map("negative_prompt")
+  settingsJson    Json      @default("{}") @map("settings_json")
+  provider        String
+  externalJobId   String?   @map("external_job_id")
+  reservedCredits Int       @default(0) @map("reserved_credits")
+  finalCredits    Int?      @map("final_credits")
+  errorMessage    String?   @map("error_message")
+  startedAt       DateTime? @map("started_at") @db.Timestamptz
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz
+  failedAt        DateTime? @map("failed_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character? @relation(fields: [characterId], references: [id])
+  stylePack StylePack? @relation(fields: [stylePackId], references: [id])
+  jobAssets JobAsset[]
+
+  @@map("generation_jobs")
+}
+
+// ─── Job Assets ─────────────────────────────────────
+model JobAsset {
+  id        String   @id @default(uuid()) @db.Uuid
+  jobId     String   @map("job_id") @db.Uuid
+  assetId   String   @map("asset_id") @db.Uuid
+  relation  String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  job   GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  asset Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("job_assets")
+}
+
+// ─── Webhooks ───────────────────────────────────────
+model Webhook {
+  id          String    @id @default(uuid()) @db.Uuid
+  source      String
+  externalId  String?   @map("external_id")
+  payloadJson Json      @map("payload_json")
+  processedAt DateTime? @map("processed_at") @db.Timestamptz
+  status      String    @default("received")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("webhooks")
+}
+
+// ─── Audit Logs ─────────────────────────────────────
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  action       String
+  targetType   String   @map("target_type")
+  targetId     String?  @map("target_id") @db.Uuid
+  metadataJson Json     @default("{}") @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@map("audit_logs")
+}

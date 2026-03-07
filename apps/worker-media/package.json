@@ -1,0 +1,27 @@
+{
+    "name": "@snapgen/worker-media",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "dev": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" tsx --watch src/index.ts",
+        "build": "tsc",
+        "start": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" node dist/index.js",
+        "clean": "rm -rf dist",
+        "typecheck": "tsc --noEmit",
+        "lint": "echo 'no lint configured'"
+    },
+    "dependencies": {
+        "bullmq": "^5.12.0",
+        "@prisma/client": "^5.20.0",
+        "dotenv": "^16.4.5",
+        "@snapgen/db": "workspace:*",
+        "@snapgen/config": "workspace:*",
+        "@snapgen/media-adapters": "workspace:*",
+        "@snapgen/types": "workspace:*"
+    },
+    "devDependencies": {
+        "tsx": "^4.19.0",
+        "typescript": "^5.5.0",
+        "prisma": "^5.20.0"
+    }
+}

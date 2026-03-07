@@ -1,0 +1,26 @@
+{
+    "name": "snapgen",
+    "private": true,
+    "scripts": {
+        "dev": "turbo run dev",
+        "build": "turbo run build",
+        "lint": "turbo run lint",
+        "typecheck": "turbo run typecheck",
+        "postinstall": "pnpm --filter @snapgen/db db:generate",
+        "clean": "turbo run clean",
+        "db:generate": "turbo run db:generate --filter=@snapgen/db",
+        "db:push": "turbo run db:push --filter=@snapgen/db",
+        "db:seed": "turbo run db:seed --filter=@snapgen/db",
+        "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "prettier": "^3.2.5",
+        "turbo": "^2.1.0",
+        "typescript": "^5.5.0"
+    },
+    "packageManager": "pnpm@9.1.0",
+    "engines": {
+        "node": ">=20.0.0"
+    }
+}
