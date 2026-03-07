@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e134]
+  - generic [ref=e404]:
+    - navigation [ref=e405]:
+      - generic [ref=e406]:
+        - link "SnapGen" [ref=e407] [cursor=pointer]:
+          - /url: /
+          - img [ref=e409]
+          - generic [ref=e411]: SnapGen
+        - link "Pricing" [ref=e412] [cursor=pointer]:
+          - /url: /pricing
+    - main [ref=e413]:
+      - generic [ref=e414]:
+        - paragraph [ref=e415]: Terms of Service
+        - heading "Terms for using SnapGen" [level=1] [ref=e416]
+        - paragraph [ref=e417]: These terms describe the basic rules for accessing the platform, buying credits, and using generated outputs responsibly.
+      - generic [ref=e418]:
+        - generic [ref=e419]:
+          - heading "Using SnapGen" [level=2] [ref=e420]
+          - paragraph [ref=e421]: You are responsible for the prompts, uploads, and outputs you create in SnapGen. Do not upload content you do not have the right to use, and do not use the service to generate unlawful, deceptive, or abusive material.
+        - generic [ref=e422]:
+          - heading "Accounts and Billing" [level=2] [ref=e423]
+          - paragraph [ref=e424]: Paid plans renew automatically until canceled. Credits and subscription limits reset according to your active plan. We may suspend access for fraud, abuse, chargebacks, or violations of these terms.
+        - generic [ref=e425]:
+          - heading "Generated Content" [level=2] [ref=e426]
+          - paragraph [ref=e427]: You retain rights to original materials you upload and may use generated outputs subject to applicable law, third-party rights, and any model or provider restrictions attached to the underlying generation service.
+        - generic [ref=e428]:
+          - heading "Service Availability" [level=2] [ref=e429]
+          - paragraph [ref=e430]: AI generation relies on third-party infrastructure and may occasionally be delayed, rate-limited, or unavailable. We may update features, providers, and pricing as the platform evolves.

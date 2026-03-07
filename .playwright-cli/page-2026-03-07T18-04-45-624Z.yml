@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "SnapGen" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - img [ref=e7]
+          - generic [ref=e9]: SnapGen
+        - link "Pricing" [ref=e10] [cursor=pointer]:
+          - /url: /pricing
+    - main [ref=e11]:
+      - generic [ref=e12]:
+        - paragraph [ref=e13]: Privacy Policy
+        - heading "How SnapGen handles your data" [level=1] [ref=e14]
+        - paragraph [ref=e15]: This page summarizes the information SnapGen collects, why it is used, and the controls available to account owners.
+      - generic [ref=e16]:
+        - generic [ref=e17]:
+          - heading "Information We Collect" [level=2] [ref=e18]
+          - paragraph [ref=e19]: SnapGen stores account details, uploaded training assets, prompts, generated media, billing events, and operational logs needed to run the service, prevent abuse, and support your workspace.
+        - generic [ref=e20]:
+          - heading "How We Use Data" [level=2] [ref=e21]
+          - paragraph [ref=e22]: We use your data to authenticate users, process payments, generate media, improve reliability, and respond to support requests. We do not sell your personal information.
+        - generic [ref=e23]:
+          - heading "Storage and Sharing" [level=2] [ref=e24]
+          - paragraph [ref=e25]: Generated outputs and uploads may be processed by trusted infrastructure providers involved in storage, billing, and model execution. Access is limited to delivering the service and meeting legal obligations.
+        - generic [ref=e26]:
+          - heading "Your Controls" [level=2] [ref=e27]
+          - paragraph [ref=e28]: You can update your profile, remove assets, and request account deletion. Some billing, fraud-prevention, and audit records may be retained when legally required or operationally necessary.
+  - alert [ref=e29]

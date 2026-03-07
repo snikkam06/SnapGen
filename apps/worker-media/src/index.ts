@@ -8,6 +8,20 @@ import { getRedisConnectionConfig } from '@snapgen/config';
 const prisma = new PrismaClient();
 const connection = getRedisConnectionConfig(process.env.REDIS_URL);
 
+function getImageProviderApiKey(provider: string): string {
+    switch (provider) {
+        case 'google':
+        case 'gemini':
+            return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+        case 'replicate':
+            return process.env.REPLICATE_API_TOKEN || '';
+        case 'fal':
+            return process.env.FAL_API_KEY || '';
+        default:
+            return '';
+    }
+}
+
 async function isRedisReachable(): Promise<boolean> {
     return new Promise((resolve) => {
         const socket = net.createConnection({
@@ -51,9 +65,7 @@ async function bootstrap() {
 
                 const adapter = createImageAdapter(
                     genJob.provider,
-                    genJob.provider === 'fal'
-                        ? process.env.FAL_API_KEY || ''
-                        : process.env.REPLICATE_API_TOKEN || '',
+                    getImageProviderApiKey(genJob.provider),
                 );
 
                 const settings = genJob.settingsJson as Record<string, unknown>;

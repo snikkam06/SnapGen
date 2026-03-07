@@ -127,6 +127,35 @@ interface ReplicatePredictionResponse {
     error?: string;
 }
 
+interface GeminiGenerateContentResponse {
+    candidates?: Array<{
+        finishReason?: string;
+        content?: {
+            parts?: Array<{
+                text?: string;
+                inlineData?: {
+                    mimeType?: string;
+                    data?: string;
+                };
+                inline_data?: {
+                    mime_type?: string;
+                    data?: string;
+                };
+            }>;
+        };
+    }>;
+    promptFeedback?: {
+        blockReason?: string;
+        safetyRatings?: Array<{
+            category?: string;
+            probability?: string;
+        }>;
+    };
+    error?: {
+        message?: string;
+    };
+}
+
 // ─── Fal.ai Implementation ──────────────────────────
 export class FalImageAdapter implements ImageGenerationAdapter {
     readonly providerName = 'fal';
@@ -310,6 +339,183 @@ export class ReplicateImageAdapter implements ImageGenerationAdapter {
     }
 }
 
+// ─── Google Gemini Implementation ───────────────────
+export class GoogleImageAdapter implements ImageGenerationAdapter {
+    readonly providerName = 'google';
+    private apiKey: string;
+    private baseUrl =
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+    private static completedJobs = new Map<
+        string,
+        {
+            status: 'completed' | 'failed';
+            outputs?: Array<{ url: string; mimeType: string }>;
+            errorMessage?: string;
+        }
+    >();
+
+    constructor(apiKey: string) {
+        this.apiKey = apiKey;
+    }
+
+    async createJob(input: ImageGenerationInput): Promise<{
+        externalJobId: string;
+        status: 'queued' | 'running' | 'completed';
+    }> {
+        if (!this.apiKey) {
+            throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is required for Google image generation');
+        }
+
+        const requestCount = Math.max(1, Math.min(input.numImages ?? 1, 4));
+        const outputs = (
+            await Promise.all(
+                Array.from({ length: requestCount }, async () => this.generateImages(input)),
+            )
+        ).flat();
+
+        if (!outputs.length) {
+            throw new Error('Google Gemini returned no image outputs');
+        }
+
+        const externalJobId = `google-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        GoogleImageAdapter.completedJobs.set(externalJobId, {
+            status: 'completed',
+            outputs,
+        });
+
+        return {
+            externalJobId,
+            status: 'completed',
+        };
+    }
+
+    async getJob(externalJobId: string): Promise<{
+        status: 'queued' | 'running' | 'completed' | 'failed';
+        outputs?: Array<{ url: string; mimeType: string }>;
+        errorMessage?: string;
+    }> {
+        const completedJob = GoogleImageAdapter.completedJobs.get(externalJobId);
+        if (!completedJob) {
+            return {
+                status: 'failed',
+                errorMessage: 'Google image job result is unavailable',
+            };
+        }
+
+        return completedJob;
+    }
+
+    private async generateImages(
+        input: ImageGenerationInput,
+    ): Promise<Array<{ url: string; mimeType: string }>> {
+        const response = await fetch(this.baseUrl, {
+            method: 'POST',
+            headers: {
+                'x-goog-api-key': this.apiKey,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ text: this.buildPrompt(input.prompt, input.negativePrompt) }],
+                    },
+                ],
+                generationConfig: {
+                    responseModalities: ['IMAGE'],
+                    imageConfig: {
+                        aspectRatio: this.normalizeAspectRatio(input.aspectRatio),
+                    },
+                },
+            }),
+        });
+
+        const payload = (await response.json()) as GeminiGenerateContentResponse;
+        if (!response.ok) {
+            throw new Error(
+                payload.error?.message ||
+                    `Google Gemini API error: ${response.status} ${response.statusText}`,
+            );
+        }
+
+        const outputs = this.extractOutputs(payload);
+        if (!outputs.length) {
+            throw new Error(this.extractErrorMessage(payload));
+        }
+
+        return outputs;
+    }
+
+    private buildPrompt(prompt: string, negativePrompt?: string): string {
+        if (!negativePrompt?.trim()) {
+            return prompt;
+        }
+
+        return `${prompt}\n\nAvoid: ${negativePrompt.trim()}`;
+    }
+
+    private normalizeAspectRatio(ratio?: string): string {
+        const allowedRatios = new Set([
+            '1:1',
+            '1:4',
+            '1:8',
+            '3:4',
+            '4:3',
+            '9:16',
+            '16:9',
+            '21:9',
+        ]);
+
+        if (!ratio || !allowedRatios.has(ratio)) {
+            return '1:1';
+        }
+
+        return ratio;
+    }
+
+    private extractOutputs(
+        payload: GeminiGenerateContentResponse,
+    ): Array<{ url: string; mimeType: string }> {
+        const parts =
+            payload.candidates?.flatMap((candidate) => candidate.content?.parts ?? []) ?? [];
+
+        return parts
+            .map((part) => {
+                const inlineData = part.inlineData || part.inline_data;
+                const mimeType =
+                    part.inlineData?.mimeType || part.inline_data?.mime_type || 'image/png';
+                const data = inlineData?.data;
+
+                if (!data) {
+                    return null;
+                }
+
+                return {
+                    url: `data:${mimeType};base64,${data}`,
+                    mimeType,
+                };
+            })
+            .filter((output): output is { url: string; mimeType: string } => output !== null);
+    }
+
+    private extractErrorMessage(payload: GeminiGenerateContentResponse): string {
+        if (payload.error?.message) {
+            return payload.error.message;
+        }
+
+        if (payload.promptFeedback?.blockReason) {
+            return `Google Gemini blocked the prompt: ${payload.promptFeedback.blockReason}`;
+        }
+
+        const finishReason = payload.candidates?.find((candidate) => candidate.finishReason)?.finishReason;
+        if (finishReason && finishReason !== 'STOP') {
+            return `Google Gemini did not return an image: ${finishReason}`;
+        }
+
+        return 'Google Gemini returned no image outputs';
+    }
+}
+
 // ─── Mock adapter for development ────────────────────
 export class MockImageAdapter implements ImageGenerationAdapter {
     readonly providerName = 'mock';
@@ -345,6 +551,9 @@ export class MockImageAdapter implements ImageGenerationAdapter {
 // ─── Provider Factory ────────────────────────────────
 export function createImageAdapter(provider: string, apiKey: string): ImageGenerationAdapter {
     switch (provider) {
+        case 'google':
+        case 'gemini':
+            return new GoogleImageAdapter(apiKey);
         case 'fal':
             return new FalImageAdapter(apiKey);
         case 'replicate':

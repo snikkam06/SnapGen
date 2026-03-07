@@ -1,0 +1,115 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e134]
+  - generic [ref=e272]:
+    - navigation [ref=e273]:
+      - generic [ref=e274]:
+        - link "SnapGen" [ref=e275] [cursor=pointer]:
+          - /url: /
+          - img [ref=e277]
+          - generic [ref=e279]: SnapGen
+        - generic [ref=e280]:
+          - link "Pricing" [ref=e281] [cursor=pointer]:
+            - /url: /pricing
+          - link "Sign In" [ref=e282] [cursor=pointer]:
+            - /url: /sign-in
+          - link "Get Started Free" [ref=e283] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started Free
+            - img [ref=e284]
+    - generic [ref=e291]:
+      - generic [ref=e292]:
+        - img [ref=e293]
+        - generic [ref=e295]: Now with FLUX & SDXL support
+      - heading "Create Stunning AI-Generated Content" [level=1] [ref=e296]:
+        - text: Create Stunning
+        - text: AI-Generated Content
+      - paragraph [ref=e297]: Train custom AI models on your characters, generate photorealistic images and videos, and build your content portfolio — all with a few clicks.
+      - generic [ref=e298]:
+        - link "Start Creating Free" [ref=e299] [cursor=pointer]:
+          - /url: /sign-up
+          - text: Start Creating Free
+          - img [ref=e300]
+        - link "View Pricing" [ref=e302] [cursor=pointer]:
+          - /url: /pricing
+      - generic [ref=e303]:
+        - generic [ref=e304]:
+          - generic [ref=e305]: 500K+
+          - generic [ref=e306]: Images Generated
+        - generic [ref=e307]:
+          - generic [ref=e308]: 10K+
+          - generic [ref=e309]: Active Users
+        - generic [ref=e310]:
+          - generic [ref=e311]: 99.9%
+          - generic [ref=e312]: Uptime
+    - generic [ref=e314]:
+      - generic [ref=e315]:
+        - heading "Everything You Need to Create" [level=2] [ref=e316]
+        - paragraph [ref=e317]: A complete platform for AI-powered content creation, from model training to final export.
+      - generic [ref=e318]:
+        - generic [ref=e319] [cursor=pointer]:
+          - img [ref=e321]
+          - heading "Custom Character Training" [level=3] [ref=e323]
+          - paragraph [ref=e324]: Upload photos and train LoRA models for your unique characters. Create AI versions of anyone with photorealistic accuracy.
+        - generic [ref=e325] [cursor=pointer]:
+          - img [ref=e327]
+          - heading "Image Generation" [level=3] [ref=e331]
+          - paragraph [ref=e332]: Generate unlimited high-quality images with your trained characters. Multiple style packs, aspect ratios, and fine-tuned control.
+        - generic [ref=e333] [cursor=pointer]:
+          - img [ref=e335]
+          - heading "Video Generation" [level=3] [ref=e338]
+          - paragraph [ref=e339]: Bring your characters to life with AI-generated videos. Create dynamic content in just a few seconds.
+        - generic [ref=e340] [cursor=pointer]:
+          - img [ref=e342]
+          - heading "Face Swap" [level=3] [ref=e346]
+          - paragraph [ref=e347]: Seamlessly swap faces in images and videos. Perfect for creating variations and custom scenarios.
+        - generic [ref=e348] [cursor=pointer]:
+          - img [ref=e350]
+          - heading "Instant Upscaling" [level=3] [ref=e352]
+          - paragraph [ref=e353]: 4x upscale your generated images with AI super-resolution. Get print-quality results every time.
+        - generic [ref=e354] [cursor=pointer]:
+          - img [ref=e356]
+          - heading "Private & Secure" [level=3] [ref=e358]
+          - paragraph [ref=e359]: All your content is stored securely with signed URLs. Full control over your creations with private galleries.
+    - generic [ref=e361]:
+      - heading "How It Works" [level=2] [ref=e363]
+      - generic [ref=e364]:
+        - generic [ref=e365]:
+          - generic [ref=e366]: "01"
+          - generic [ref=e367]:
+            - heading "Create Your Character" [level=3] [ref=e368]
+            - paragraph [ref=e369]: Upload 10-20 high-quality photos of your subject. Our AI will learn their unique features.
+        - generic [ref=e370]:
+          - generic [ref=e371]: "02"
+          - generic [ref=e372]:
+            - heading "Train Your Model" [level=3] [ref=e373]
+            - paragraph [ref=e374]: Our AI trains a custom LoRA model in minutes. This captures the essence of your character.
+        - generic [ref=e375]:
+          - generic [ref=e376]: "03"
+          - generic [ref=e377]:
+            - heading "Generate Content" [level=3] [ref=e378]
+            - paragraph [ref=e379]: Use your trained model to generate unlimited images and videos in any style or scenario.
+        - generic [ref=e380]:
+          - generic [ref=e381]: "04"
+          - generic [ref=e382]:
+            - heading "Export & Share" [level=3] [ref=e383]
+            - paragraph [ref=e384]: Download your creations in high resolution. Build your portfolio and share with the world.
+    - generic [ref=e386]:
+      - heading "Ready to Get Started?" [level=2] [ref=e387]
+      - paragraph [ref=e388]: Join thousands of creators already using SnapGen to build stunning AI content. Start free, upgrade when you need more power.
+      - link "Create Your First Character" [ref=e389] [cursor=pointer]:
+        - /url: /sign-up
+        - text: Create Your First Character
+        - img [ref=e390]
+    - contentinfo [ref=e392]:
+      - generic [ref=e393]:
+        - generic [ref=e394]:
+          - img [ref=e396]
+          - generic [ref=e398]: SnapGen
+        - generic [ref=e399]:
+          - link "Terms" [ref=e400] [cursor=pointer]:
+            - /url: /terms
+          - link "Privacy" [ref=e401] [cursor=pointer]:
+            - /url: /privacy
+          - link "Pricing" [ref=e402] [cursor=pointer]:
+            - /url: /pricing
+        - generic [ref=e403]: © 2026 SnapGen. All rights reserved.

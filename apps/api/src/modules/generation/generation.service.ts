@@ -204,6 +204,10 @@ export class GenerationService {
             return process.env.IMAGE_PROVIDER;
         }
 
+        if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+            return 'google';
+        }
+
         if (process.env.REPLICATE_API_TOKEN) {
             return 'replicate';
         }
@@ -233,9 +237,7 @@ export class GenerationService {
             const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
             const adapter = createImageAdapter(
                 genJob.provider,
-                genJob.provider === 'fal'
-                    ? process.env.FAL_API_KEY || ''
-                    : process.env.REPLICATE_API_TOKEN || '',
+                this.getImageProviderApiKey(genJob.provider),
             );
 
             const createdJob = await adapter.createJob({
@@ -348,6 +350,20 @@ export class GenerationService {
                     relation: 'output',
                 },
             });
+        }
+    }
+
+    private getImageProviderApiKey(provider: string): string {
+        switch (provider) {
+            case 'google':
+            case 'gemini':
+                return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+            case 'replicate':
+                return process.env.REPLICATE_API_TOKEN || '';
+            case 'fal':
+                return process.env.FAL_API_KEY || '';
+            default:
+                return '';
         }
     }
 }

@@ -1,0 +1,6 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e6]:
+    - paragraph [ref=e7]: SnapGen
+    - heading "Sign in to SnapGen" [level=1] [ref=e8]
+    - paragraph [ref=e9]: Access your dashboard, credits, and generation history.
+  - alert [ref=e10]

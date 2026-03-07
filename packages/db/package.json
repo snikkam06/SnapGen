@@ -7,6 +7,7 @@
     "scripts": {
         "db:generate": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../../apps/api/.env -- prisma generate",
         "db:push": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../../apps/api/.env -- prisma db push",
+        "db:migrate:deploy": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../../apps/api/.env -- prisma migrate deploy",
         "db:seed": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../../apps/api/.env -- tsx src/seed.ts",
         "build": "pnpm db:generate && tsc",
         "clean": "rm -rf dist",

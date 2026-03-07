@@ -1,4 +1,4 @@
-import { Controller, Post, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
@@ -14,9 +14,6 @@ export class AuthController {
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Sync user after frontend login' })
     async sync(@CurrentUser() user: AuthUser) {
-        return this.authService.syncUser(
-            user.clerkUserId,
-            user.email || '',
-        );
+        return this.authService.syncUser(user.clerkUserId);
     }
 }

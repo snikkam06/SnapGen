@@ -1,0 +1,143 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e134]
+  - generic [ref=e431]:
+    - navigation [ref=e432]:
+      - generic [ref=e433]:
+        - link "SnapGen" [ref=e434] [cursor=pointer]:
+          - /url: /
+          - img [ref=e436]
+          - generic [ref=e438]: SnapGen
+        - link "Get Started" [ref=e439] [cursor=pointer]:
+          - /url: /sign-up
+    - generic [ref=e440]:
+      - generic [ref=e441]:
+        - heading "Simple, Transparent Pricing" [level=1] [ref=e442]
+        - paragraph [ref=e443]: Start free and scale as you grow. No hidden fees, cancel anytime.
+      - generic [ref=e444]:
+        - generic [ref=e445]:
+          - generic [ref=e446]:
+            - heading "Free" [level=3] [ref=e447]
+            - generic [ref=e448]:
+              - generic [ref=e449]: $0
+              - generic [ref=e450]: /mo
+            - generic [ref=e451]: 50 credits/mo
+          - list [ref=e452]:
+            - listitem [ref=e453]:
+              - img [ref=e454]
+              - text: 1 character
+            - listitem [ref=e456]:
+              - img [ref=e457]
+              - text: 2 images per generation
+            - listitem [ref=e459]:
+              - img [ref=e460]
+              - text: Basic style packs
+            - listitem [ref=e462]:
+              - img [ref=e463]
+              - text: Standard queue
+          - link "Get Started" [ref=e465] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e466]
+        - generic [ref=e468]:
+          - generic [ref=e469]: Most Popular
+          - generic [ref=e470]:
+            - heading "Creator" [level=3] [ref=e471]
+            - generic [ref=e472]:
+              - generic [ref=e473]: $19.99
+              - generic [ref=e474]: /mo
+            - generic [ref=e475]: 500 credits/mo
+          - list [ref=e476]:
+            - listitem [ref=e477]:
+              - img [ref=e478]
+              - text: 5 characters
+            - listitem [ref=e480]:
+              - img [ref=e481]
+              - text: 4 images per generation
+            - listitem [ref=e483]:
+              - img [ref=e484]
+              - text: All style packs
+            - listitem [ref=e486]:
+              - img [ref=e487]
+              - text: Video generation
+            - listitem [ref=e489]:
+              - img [ref=e490]
+              - text: Face swap
+            - listitem [ref=e492]:
+              - img [ref=e493]
+              - text: Image upscaling
+          - link "Get Started" [ref=e495] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e496]
+        - generic [ref=e498]:
+          - generic [ref=e499]:
+            - heading "Pro" [level=3] [ref=e500]
+            - generic [ref=e501]:
+              - generic [ref=e502]: $49.99
+              - generic [ref=e503]: /mo
+            - generic [ref=e504]: 2,000 credits/mo
+          - list [ref=e505]:
+            - listitem [ref=e506]:
+              - img [ref=e507]
+              - text: 20 characters
+            - listitem [ref=e509]:
+              - img [ref=e510]
+              - text: 8 images per generation
+            - listitem [ref=e512]:
+              - img [ref=e513]
+              - text: All style packs
+            - listitem [ref=e515]:
+              - img [ref=e516]
+              - text: Video generation
+            - listitem [ref=e518]:
+              - img [ref=e519]
+              - text: Face swap
+            - listitem [ref=e521]:
+              - img [ref=e522]
+              - text: Image upscaling
+            - listitem [ref=e524]:
+              - img [ref=e525]
+              - text: Priority queue
+          - link "Get Started" [ref=e527] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e528]
+        - generic [ref=e530]:
+          - generic [ref=e531]:
+            - heading "Business" [level=3] [ref=e532]
+            - generic [ref=e533]:
+              - generic [ref=e534]: $149.99
+              - generic [ref=e535]: /mo
+            - generic [ref=e536]: 10,000 credits/mo
+          - list [ref=e537]:
+            - listitem [ref=e538]:
+              - img [ref=e539]
+              - text: Unlimited characters
+            - listitem [ref=e541]:
+              - img [ref=e542]
+              - text: 16 images per generation
+            - listitem [ref=e544]:
+              - img [ref=e545]
+              - text: All style packs
+            - listitem [ref=e547]:
+              - img [ref=e548]
+              - text: Video generation
+            - listitem [ref=e550]:
+              - img [ref=e551]
+              - text: Face swap
+            - listitem [ref=e553]:
+              - img [ref=e554]
+              - text: Image upscaling
+            - listitem [ref=e556]:
+              - img [ref=e557]
+              - text: Priority queue
+            - listitem [ref=e559]:
+              - img [ref=e560]
+              - text: API access
+            - listitem [ref=e562]:
+              - img [ref=e563]
+              - text: White-label options
+          - link "Get Started" [ref=e565] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e566]

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
 
 if (process.env.DATABASE_URL) {
     process.stdout.write(process.env.DATABASE_URL);
@@ -22,7 +23,7 @@ const databaseUrl = databaseUrlLine.slice('DATABASE_URL='.length);
 const parsed = new URL(databaseUrl);
 const localClusterPath = path.join(repoRoot, '.local/postgres/PG_VERSION');
 
-if (fs.existsSync(localClusterPath)) {
+if (fs.existsSync(localClusterPath) && localHosts.has(parsed.hostname)) {
     parsed.port = process.env.SNAPGEN_LOCAL_DB_PORT || '55432';
 }
 
