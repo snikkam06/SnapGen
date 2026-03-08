@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { CharacterService } from './character.service';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
 import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
@@ -56,6 +57,18 @@ export class CharacterController {
         @Body() body: { fileName: string; contentType: string; fileSizeBytes: number },
     ) {
         return this.characterService.getUploadUrl(user.clerkUserId, id, body);
+    }
+
+    @Post(':id/dataset/upload')
+    @ApiOperation({ summary: 'Upload dataset image directly' })
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(FileInterceptor('file'))
+    async uploadDataset(
+        @CurrentUser() user: AuthUser,
+        @Param('id') id: string,
+        @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+    ) {
+        return this.characterService.uploadDataset(user.clerkUserId, id, file);
     }
 
     @Post(':id/train')

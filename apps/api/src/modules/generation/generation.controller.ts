@@ -33,7 +33,7 @@ export class GenerationController {
         @Body() body: {
             characterId?: string;
             prompt: string;
-            sourceAssetId: string;
+            sourceAssetId?: string;
             settings?: Record<string, unknown>;
         },
     ) {

@@ -1,0 +1,6 @@
+[POST] https://one-tadpole-42.clerk.accounts.dev/v1/dev_browser?__clerk_api_version=2025-11-10&_clerk_js_version=5.125.4 => [200] 
+[POST] http://localhost:3000/sign-in => [200] OK
+[POST] https://clerk-telemetry.com/v1/event => [200] 
+[POST] https://one-tadpole-42.clerk.accounts.dev/v1/environment?__clerk_api_version=2025-11-10&_clerk_js_version=5.125.4&_method=PATCH&__clerk_db_jwt=dvb_3AdhjvmB3cxBmSa81UV1bRpgUFB => [200] 
+[GET] https://one-tadpole-42.clerk.accounts.dev/v1/client?__clerk_api_version=2025-11-10&_clerk_js_version=5.125.4&__clerk_db_jwt=dvb_3AdhjvmB3cxBmSa81UV1bRpgUFB => [200] 
+[POST] https://clerk-telemetry.com/v1/event => [200] 

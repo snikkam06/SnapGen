@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { GenerationService } from '../generation/generation.service';
 
 @Injectable()
 export class JobService {
     constructor(
         private prisma: PrismaService,
         private storageService: StorageService,
+        private generationService: GenerationService,
     ) { }
 
     async findAll(clerkUserId: string, filters?: { status?: string; jobType?: string }) {
@@ -45,6 +47,10 @@ export class JobService {
 
         if (!job) throw new NotFoundException('Job not found');
         if (job.userId !== user.id) throw new ForbiddenException();
+
+        if (job.jobType === 'image' && job.status === 'queued') {
+            void this.generationService.ensureImageJobProcessing(job.id);
+        }
 
         return {
             id: job.id,

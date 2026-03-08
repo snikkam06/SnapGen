@@ -1,0 +1,143 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "SnapGen" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - img [ref=e7]
+          - generic [ref=e9]: SnapGen
+        - link "Get Started" [ref=e10] [cursor=pointer]:
+          - /url: /sign-up
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - heading "Simple, Transparent Pricing" [level=1] [ref=e13]
+        - paragraph [ref=e14]: Start free and scale as you grow. No hidden fees, cancel anytime.
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - generic [ref=e17]:
+            - heading "Free" [level=3] [ref=e18]
+            - generic [ref=e19]:
+              - generic [ref=e20]: $0
+              - generic [ref=e21]: /mo
+            - generic [ref=e22]: 50 credits/mo
+          - list [ref=e23]:
+            - listitem [ref=e24]:
+              - img [ref=e25]
+              - text: 1 character
+            - listitem [ref=e27]:
+              - img [ref=e28]
+              - text: 2 images per generation
+            - listitem [ref=e30]:
+              - img [ref=e31]
+              - text: Basic style packs
+            - listitem [ref=e33]:
+              - img [ref=e34]
+              - text: Standard queue
+          - link "Get Started" [ref=e36] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e37]
+        - generic [ref=e39]:
+          - generic [ref=e40]: Most Popular
+          - generic [ref=e41]:
+            - heading "Creator" [level=3] [ref=e42]
+            - generic [ref=e43]:
+              - generic [ref=e44]: $19.99
+              - generic [ref=e45]: /mo
+            - generic [ref=e46]: 500 credits/mo
+          - list [ref=e47]:
+            - listitem [ref=e48]:
+              - img [ref=e49]
+              - text: 5 characters
+            - listitem [ref=e51]:
+              - img [ref=e52]
+              - text: 4 images per generation
+            - listitem [ref=e54]:
+              - img [ref=e55]
+              - text: All style packs
+            - listitem [ref=e57]:
+              - img [ref=e58]
+              - text: Video generation
+            - listitem [ref=e60]:
+              - img [ref=e61]
+              - text: Face swap
+            - listitem [ref=e63]:
+              - img [ref=e64]
+              - text: Image upscaling
+          - link "Get Started" [ref=e66] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e67]
+        - generic [ref=e69]:
+          - generic [ref=e70]:
+            - heading "Pro" [level=3] [ref=e71]
+            - generic [ref=e72]:
+              - generic [ref=e73]: $49.99
+              - generic [ref=e74]: /mo
+            - generic [ref=e75]: 2,000 credits/mo
+          - list [ref=e76]:
+            - listitem [ref=e77]:
+              - img [ref=e78]
+              - text: 20 characters
+            - listitem [ref=e80]:
+              - img [ref=e81]
+              - text: 8 images per generation
+            - listitem [ref=e83]:
+              - img [ref=e84]
+              - text: All style packs
+            - listitem [ref=e86]:
+              - img [ref=e87]
+              - text: Video generation
+            - listitem [ref=e89]:
+              - img [ref=e90]
+              - text: Face swap
+            - listitem [ref=e92]:
+              - img [ref=e93]
+              - text: Image upscaling
+            - listitem [ref=e95]:
+              - img [ref=e96]
+              - text: Priority queue
+          - link "Get Started" [ref=e98] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e99]
+        - generic [ref=e101]:
+          - generic [ref=e102]:
+            - heading "Business" [level=3] [ref=e103]
+            - generic [ref=e104]:
+              - generic [ref=e105]: $149.99
+              - generic [ref=e106]: /mo
+            - generic [ref=e107]: 10,000 credits/mo
+          - list [ref=e108]:
+            - listitem [ref=e109]:
+              - img [ref=e110]
+              - text: Unlimited characters
+            - listitem [ref=e112]:
+              - img [ref=e113]
+              - text: 16 images per generation
+            - listitem [ref=e115]:
+              - img [ref=e116]
+              - text: All style packs
+            - listitem [ref=e118]:
+              - img [ref=e119]
+              - text: Video generation
+            - listitem [ref=e121]:
+              - img [ref=e122]
+              - text: Face swap
+            - listitem [ref=e124]:
+              - img [ref=e125]
+              - text: Image upscaling
+            - listitem [ref=e127]:
+              - img [ref=e128]
+              - text: Priority queue
+            - listitem [ref=e130]:
+              - img [ref=e131]
+              - text: API access
+            - listitem [ref=e133]:
+              - img [ref=e134]
+              - text: White-label options
+          - link "Get Started" [ref=e136] [cursor=pointer]:
+            - /url: /sign-up
+            - text: Get Started
+            - img [ref=e137]
+  - alert [ref=e139]

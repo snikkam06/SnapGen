@@ -3,6 +3,7 @@ import net from 'node:net';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { json } from 'express';
 
 async function isRedisReachable(redisUrl?: string): Promise<boolean> {
     if (!redisUrl) {
@@ -33,7 +34,10 @@ async function bootstrap() {
     }
 
     const { AppModule } = await import('./app.module');
-    const app = await NestFactory.create(AppModule);
+    const app = await NestFactory.create(AppModule, { rawBody: true });
+
+    // Increase body size limit for file uploads
+    app.use(json({ limit: '50mb' }));
 
     // Global prefix
     app.setGlobalPrefix('api');

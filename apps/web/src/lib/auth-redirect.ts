@@ -1,5 +1,26 @@
 const DEFAULT_AUTH_REDIRECT = '/dashboard';
 
+export function getFirstSearchParamValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export function getRequestOrigin(headers: Pick<Headers, 'get'>) {
+  const host = headers.get('x-forwarded-host') ?? headers.get('host');
+
+  if (!host) {
+    return undefined;
+  }
+
+  const normalizedHost = host.split(',')[0]?.trim();
+
+  if (!normalizedHost) {
+    return undefined;
+  }
+
+  const proto = headers.get('x-forwarded-proto') ?? 'http';
+  return `${proto}://${normalizedHost}`;
+}
+
 export function resolveAuthRedirectTarget(
   rawRedirectUrl: string | null | undefined,
   origin?: string,

@@ -22,6 +22,39 @@ function getImageProviderApiKey(provider: string): string {
     }
 }
 
+async function claimQueuedImageJob(jobId: string) {
+    const genJob = await prisma.generationJob.findUnique({ where: { id: jobId } });
+    if (!genJob) {
+        console.warn(`[Worker] Skipping image job ${jobId}: database record not found`);
+        return null;
+    }
+
+    if (genJob.jobType !== 'image') {
+        console.warn(`[Worker] Skipping non-image job ${jobId} on image worker`);
+        return null;
+    }
+
+    const claimed = await prisma.generationJob.updateMany({
+        where: {
+            id: jobId,
+            status: 'queued',
+        },
+        data: {
+            status: 'running',
+            startedAt: new Date(),
+            errorMessage: null,
+            failedAt: null,
+        },
+    });
+
+    if (claimed.count === 0) {
+        console.log(`[Worker] Skipping image job ${jobId}: status is no longer queued`);
+        return null;
+    }
+
+    return genJob;
+}
+
 async function isRedisReachable(): Promise<boolean> {
     return new Promise((resolve) => {
         const socket = net.createConnection({
@@ -55,13 +88,10 @@ async function bootstrap() {
             console.log(`[Worker] Processing image job: ${jobId}`);
 
             try {
-                const genJob = await prisma.generationJob.findUnique({ where: { id: jobId } });
-                if (!genJob) throw new Error(`Job ${jobId} not found`);
-
-                await prisma.generationJob.update({
-                    where: { id: jobId },
-                    data: { status: 'running', startedAt: new Date() },
-                });
+                const genJob = await claimQueuedImageJob(jobId);
+                if (!genJob) {
+                    return;
+                }
 
                 const adapter = createImageAdapter(
                     genJob.provider,
@@ -72,10 +102,16 @@ async function bootstrap() {
                 const result = await adapter.createJob({
                     prompt: genJob.prompt || '',
                     negativePrompt: genJob.negativePrompt || undefined,
+                    referenceImages: Array.isArray(settings.referenceImages)
+                        ? (settings.referenceImages as string[])
+                        : undefined,
                     aspectRatio: settings.aspectRatio as string,
                     numImages: (settings.numImages as number) || 4,
                     seed: settings.seed as number,
                     guidance: settings.guidance as number,
+                    settings: {
+                        characterName: settings.characterName,
+                    },
                 });
 
                 let jobResult =

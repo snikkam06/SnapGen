@@ -96,6 +96,26 @@ class ApiClient {
         });
     }
 
+    async uploadCharacterImage(token: string, characterId: string, file: File) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${this.baseUrl}/v1/characters/${characterId}/dataset/upload`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ message: 'Upload failed' }));
+            throw new Error(error.message || `Upload failed: ${response.status}`);
+        }
+
+        return response.json();
+    }
+
     async trainCharacter(token: string, characterId: string, data: { trainingPreset: string }) {
         return this.request(`/v1/characters/${characterId}/train`, {
             method: 'POST',
@@ -139,6 +159,31 @@ class ApiClient {
 
     async deleteAsset(token: string, id: string) {
         return this.request(`/v1/assets/${id}`, { method: 'DELETE', token });
+    }
+
+    // Admin
+    async adminSearchUsers(token: string, query: string) {
+        return this.request(`/v1/admin/users?q=${encodeURIComponent(query)}`, { token });
+    }
+
+    async adminGetFailedJobs(token: string) {
+        return this.request('/v1/admin/jobs/failed', { token });
+    }
+
+    async adminRetryJob(token: string, jobId: string) {
+        return this.request(`/v1/admin/jobs/${jobId}/retry`, { method: 'POST', token });
+    }
+
+    async adminAdjustCredits(token: string, data: { userId: string; amount: number; reason: string }) {
+        return this.request('/v1/admin/credits/adjust', { method: 'POST', token, body: JSON.stringify(data) });
+    }
+
+    async adminGetModerationQueue(token: string) {
+        return this.request('/v1/admin/moderation', { token });
+    }
+
+    async adminModerateAsset(token: string, assetId: string, status: string) {
+        return this.request(`/v1/admin/moderation/${assetId}`, { method: 'PATCH', token, body: JSON.stringify({ status }) });
     }
 }
 

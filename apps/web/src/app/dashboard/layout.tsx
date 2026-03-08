@@ -18,6 +18,7 @@ import {
   Wand2,
   ArrowUpCircle,
   LogOut,
+  Video,
 } from 'lucide-react';
 import { useState } from 'react';
 import { AuthSync } from '@/components/auth-sync';
@@ -31,6 +32,7 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Characters', href: '/dashboard/characters', icon: Users },
   { name: 'Generate', href: '/dashboard/generate', icon: Wand2 },
+  { name: 'Video', href: '/dashboard/video', icon: Video },
   { name: 'Gallery', href: '/dashboard/gallery', icon: FolderOpen },
   { name: 'Face Swap', href: '/dashboard/faceswap', icon: Layers },
   { name: 'Upscale', href: '/dashboard/upscale', icon: ArrowUpCircle },

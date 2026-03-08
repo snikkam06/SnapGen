@@ -1,15 +1,19 @@
 import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { Prisma } from '@prisma/client';
-import { createImageAdapter } from '@snapgen/media-adapters';
+import { Prisma, GenerationJob } from '@prisma/client';
+import { createImageAdapter, createVideoAdapter } from '@snapgen/media-adapters';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CREDIT_COSTS, VALID_JOB_TRANSITIONS } from '@snapgen/config';
+import { StorageService } from '../storage/storage.service';
+
+const QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS = 15_000;
 
 @Injectable()
 export class GenerationService {
     constructor(
         private prisma: PrismaService,
+        private storageService: StorageService,
         @Optional() @InjectQueue('image-generation') private mediaQueue?: Queue,
     ) { }
 
@@ -25,6 +29,16 @@ export class GenerationService {
 
         const numImages = (data.settings?.numImages as number) || 4;
         const totalCost = CREDIT_COSTS.image * numImages;
+        const characterContext = await this.getCharacterGenerationContext(user.id, data.characterId);
+        const jobSettings = {
+            ...(data.settings || {}),
+            ...(characterContext.characterName
+                ? { characterName: characterContext.characterName }
+                : {}),
+            ...(characterContext.referenceImages.length > 0
+                ? { referenceImages: characterContext.referenceImages }
+                : {}),
+        };
 
         // Check balance
         const balance = await this.getBalance(user.id);
@@ -52,21 +66,13 @@ export class GenerationService {
                 status: 'queued',
                 prompt: data.prompt,
                 negativePrompt: data.negativePrompt || null,
-                settingsJson: (data.settings || {}) as Prisma.InputJsonValue,
+                settingsJson: jobSettings as Prisma.InputJsonValue,
                 provider: this.getImageProvider(),
                 reservedCredits: totalCost,
             },
         });
 
-        if (this.mediaQueue) {
-            try {
-                await this.mediaQueue.add('generate-image', { jobId: job.id });
-            } catch (error) {
-                void this.processImageJob(job.id);
-            }
-        } else {
-            void this.processImageJob(job.id);
-        }
+        await this.dispatchImageJob(job.id);
 
         return {
             id: job.id,
@@ -79,7 +85,7 @@ export class GenerationService {
     async createVideoJob(clerkUserId: string, data: {
         characterId?: string;
         prompt: string;
-        sourceAssetId: string;
+        sourceAssetId?: string;
         settings?: Record<string, unknown>;
     }) {
         const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
@@ -91,6 +97,18 @@ export class GenerationService {
             throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
         }
 
+        // Resolve source asset URL if provided
+        let sourceImageUrl: string | undefined;
+        if (data.sourceAssetId) {
+            const asset = await this.prisma.asset.findUnique({ where: { id: data.sourceAssetId } });
+            if (asset) {
+                sourceImageUrl = await this.storageService.getSignedDownloadUrl(
+                    asset.storageBucket,
+                    asset.storageKey,
+                );
+            }
+        }
+
         await this.prisma.creditLedger.create({
             data: {
                 userId: user.id,
@@ -100,6 +118,7 @@ export class GenerationService {
             },
         });
 
+        const provider = this.getVideoProvider();
         const job = await this.prisma.generationJob.create({
             data: {
                 userId: user.id,
@@ -110,11 +129,22 @@ export class GenerationService {
                 settingsJson: {
                     ...data.settings,
                     sourceAssetId: data.sourceAssetId,
+                    sourceImageUrl,
                 } as Prisma.InputJsonValue,
-                provider: 'mock',
+                provider,
                 reservedCredits: totalCost,
             },
         });
+
+        if (this.mediaQueue) {
+            try {
+                await this.mediaQueue.add('video-generation', { jobId: job.id });
+            } catch {
+                void this.processVideoJob(job.id).catch(err => console.error(`[GenerationService] Inline video job ${job.id} failed:`, err));
+            }
+        } else {
+            void this.processVideoJob(job.id).catch(err => console.error(`[GenerationService] Inline video job ${job.id} failed:`, err));
+        }
 
         return { id: job.id, status: job.status, reservedCredits: job.reservedCredits };
     }
@@ -219,21 +249,106 @@ export class GenerationService {
         return 'mock';
     }
 
-    private async processImageJob(jobId: string): Promise<void> {
+    async ensureImageJobProcessing(jobId: string): Promise<void> {
+        const job = await this.prisma.generationJob.findUnique({
+            where: { id: jobId },
+            select: {
+                id: true,
+                jobType: true,
+                status: true,
+                createdAt: true,
+            },
+        });
+
+        if (!job || job.jobType !== 'image' || job.status !== 'queued') {
+            return;
+        }
+
+        if (Date.now() - job.createdAt.getTime() < QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS) {
+            return;
+        }
+
+        console.warn(`[GenerationService] Rescuing stalled image job ${jobId} inline.`);
+        this.runImageJobInline(jobId);
+    }
+
+    private async dispatchImageJob(jobId: string): Promise<void> {
+        if (!this.mediaQueue) {
+            this.runImageJobInline(jobId);
+            return;
+        }
+
+        if (!(await this.hasActiveMediaWorkers())) {
+            console.warn(
+                `[GenerationService] No active media workers detected. Processing image job ${jobId} inline.`,
+            );
+            this.runImageJobInline(jobId);
+            return;
+        }
+
+        try {
+            await this.mediaQueue.add('generate-image', { jobId });
+        } catch (error) {
+            console.warn(
+                `[GenerationService] Failed to enqueue image job ${jobId}. Falling back to inline processing.`,
+                error,
+            );
+            this.runImageJobInline(jobId);
+        }
+    }
+
+    private runImageJobInline(jobId: string): void {
+        void this.processImageJob(jobId).catch((error) => {
+            console.error(`[GenerationService] Inline image job ${jobId} failed:`, error);
+        });
+    }
+
+    private async hasActiveMediaWorkers(): Promise<boolean> {
+        if (!this.mediaQueue) {
+            return false;
+        }
+
+        try {
+            return (await this.mediaQueue.getWorkersCount()) > 0;
+        } catch (error) {
+            console.warn('[GenerationService] Failed to inspect media worker availability.', error);
+            return false;
+        }
+    }
+
+    private async claimQueuedImageJob(jobId: string): Promise<GenerationJob | null> {
         const genJob = await this.prisma.generationJob.findUnique({ where: { id: jobId } });
+        if (!genJob || genJob.jobType !== 'image' || genJob.status !== 'queued') {
+            return null;
+        }
+
+        const claimed = await this.prisma.generationJob.updateMany({
+            where: {
+                id: jobId,
+                status: 'queued',
+            },
+            data: {
+                status: 'running',
+                startedAt: new Date(),
+                errorMessage: null,
+                failedAt: null,
+            },
+        });
+
+        if (claimed.count === 0) {
+            return null;
+        }
+
+        return genJob;
+    }
+
+    private async processImageJob(jobId: string): Promise<void> {
+        const genJob = await this.claimQueuedImageJob(jobId);
         if (!genJob) {
             return;
         }
 
         try {
-            await this.prisma.generationJob.update({
-                where: { id: jobId },
-                data: {
-                    status: 'running',
-                    startedAt: new Date(),
-                },
-            });
-
             const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
             const adapter = createImageAdapter(
                 genJob.provider,
@@ -243,10 +358,16 @@ export class GenerationService {
             const createdJob = await adapter.createJob({
                 prompt: genJob.prompt || '',
                 negativePrompt: genJob.negativePrompt || undefined,
+                referenceImages: Array.isArray(settings.referenceImages)
+                    ? (settings.referenceImages as string[])
+                    : undefined,
                 aspectRatio: settings.aspectRatio as string,
                 numImages: (settings.numImages as number) || 4,
                 seed: settings.seed as number,
                 guidance: settings.guidance as number,
+                settings: {
+                    characterName: settings.characterName,
+                },
             });
 
             const resolvedJob = await this.resolveImageJob(adapter, createdJob.externalJobId, createdJob.status);
@@ -353,6 +474,124 @@ export class GenerationService {
         }
     }
 
+    private getVideoProvider(): string {
+        if (process.env.VIDEO_PROVIDER) {
+            return process.env.VIDEO_PROVIDER;
+        }
+        if (process.env.KLING_API_KEY) {
+            return 'kling';
+        }
+        return 'mock';
+    }
+
+    private getVideoProviderApiKey(provider: string): string {
+        switch (provider) {
+            case 'kling':
+                return process.env.KLING_API_KEY || '';
+            default:
+                return '';
+        }
+    }
+
+    private async processVideoJob(jobId: string): Promise<void> {
+        const genJob = await this.prisma.generationJob.findUnique({ where: { id: jobId } });
+        if (!genJob) return;
+
+        try {
+            await this.prisma.generationJob.update({
+                where: { id: jobId },
+                data: { status: 'running', startedAt: new Date() },
+            });
+
+            const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
+            const adapter = createVideoAdapter(
+                genJob.provider,
+                this.getVideoProviderApiKey(genJob.provider),
+            );
+
+            const createdJob = await adapter.createJob({
+                prompt: genJob.prompt || '',
+                sourceImageUrl: settings.sourceImageUrl as string | undefined,
+                aspectRatio: settings.aspectRatio as string | undefined,
+                durationSec: settings.durationSec as number | undefined,
+                settings: {
+                    motionAmount: settings.motionAmount,
+                    cameraControl: settings.cameraControl,
+                },
+            });
+
+            let jobResult =
+                createdJob.status === 'completed'
+                    ? await adapter.getJob(createdJob.externalJobId)
+                    : { status: createdJob.status as 'queued' | 'running', outputs: undefined, errorMessage: undefined };
+
+            if (jobResult.status !== 'completed' && jobResult.status !== 'failed') {
+                for (let attempts = 0; attempts < 120; attempts++) {
+                    await new Promise((resolve) => setTimeout(resolve, 5000));
+                    jobResult = await adapter.getJob(createdJob.externalJobId);
+                    if (jobResult.status === 'completed' || jobResult.status === 'failed') break;
+                }
+            }
+
+            if (jobResult.status === 'failed') {
+                throw new Error(jobResult.errorMessage || 'Video generation failed');
+            }
+
+            if (!jobResult.outputs?.length) {
+                throw new Error('Video generation completed without any outputs');
+            }
+
+            for (const output of jobResult.outputs) {
+                const asset = await this.prisma.asset.create({
+                    data: {
+                        userId: genJob.userId,
+                        kind: 'generated-video',
+                        storageBucket: process.env.R2_BUCKET_OUTPUTS || 'outputs-private',
+                        storageKey: `users/${genJob.userId}/jobs/${jobId}/outputs/${Date.now()}.mp4`,
+                        mimeType: output.mimeType,
+                        fileSizeBytes: BigInt(0),
+                        moderationStatus: 'approved',
+                        metadataJson: { sourceUrl: output.url },
+                    },
+                });
+
+                await this.prisma.jobAsset.create({
+                    data: { jobId, assetId: asset.id, relation: 'output' },
+                });
+            }
+
+            await this.prisma.generationJob.update({
+                where: { id: jobId },
+                data: {
+                    status: 'completed',
+                    externalJobId: createdJob.externalJobId,
+                    finalCredits: genJob.reservedCredits,
+                    completedAt: new Date(),
+                },
+            });
+        } catch (error) {
+            await this.prisma.generationJob.update({
+                where: { id: jobId },
+                data: {
+                    status: 'failed',
+                    errorMessage: error instanceof Error ? error.message : 'Unknown error',
+                    failedAt: new Date(),
+                },
+            });
+
+            await this.prisma.creditLedger.create({
+                data: {
+                    userId: genJob.userId,
+                    amount: genJob.reservedCredits,
+                    entryType: 'job_refund',
+                    reason: `Refund for failed video job ${jobId}`,
+                    referenceType: 'job',
+                    referenceId: jobId,
+                },
+            });
+        }
+    }
+
     private getImageProviderApiKey(provider: string): string {
         switch (provider) {
             case 'google':
@@ -365,5 +604,52 @@ export class GenerationService {
             default:
                 return '';
         }
+    }
+
+    private async getCharacterGenerationContext(
+        userId: string,
+        characterId?: string,
+    ): Promise<{ characterName?: string; referenceImages: string[] }> {
+        if (!characterId) {
+            return { referenceImages: [] };
+        }
+
+        const character = await this.prisma.character.findFirst({
+            where: {
+                id: characterId,
+                userId,
+            },
+        });
+
+        if (!character) {
+            throw new NotFoundException('Character not found');
+        }
+
+        const referenceAssets = await this.prisma.asset.findMany({
+            where: {
+                userId,
+                kind: 'dataset-image',
+                moderationStatus: { not: 'deleted' },
+                storageKey: {
+                    startsWith: `users/${userId}/characters/${characterId}/datasets/`,
+                },
+            },
+            orderBy: { createdAt: 'asc' },
+            take: 4,
+        });
+
+        const referenceImages = await Promise.all(
+            referenceAssets.map((asset) =>
+                this.storageService.getSignedDownloadUrl(
+                    asset.storageBucket,
+                    asset.storageKey,
+                ),
+            ),
+        );
+
+        return {
+            characterName: character.name,
+            referenceImages,
+        };
     }
 }

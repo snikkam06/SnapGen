@@ -1,0 +1,10 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e6]:
+    - paragraph [ref=e7]: SnapGen
+    - heading "Create your SnapGen account" [level=1] [ref=e8]
+    - paragraph [ref=e9]: Start training characters and generating content in minutes.
+    - generic [ref=e10]:
+      - img [ref=e11]
+      - heading "Connecting to sign-up" [level=2] [ref=e13]
+      - paragraph [ref=e14]: SnapGen is waiting for Clerk to finish loading in your browser.
+  - alert [ref=e15]

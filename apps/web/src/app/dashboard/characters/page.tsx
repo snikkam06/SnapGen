@@ -1,11 +1,15 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     Users,
     Plus,
     Search,
+    Upload,
+    Sparkles,
+    Cpu,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApiToken } from '@/hooks/use-api-token';
@@ -55,6 +59,45 @@ export default function CharactersPage() {
         },
         onError: (error) => {
             toast.error(error instanceof Error ? error.message : 'Failed to create character');
+        },
+    });
+
+    const uploadDatasetMutation = useMutation({
+        mutationFn: async ({
+            characterId,
+            files,
+        }: {
+            characterId: string;
+            files: File[];
+        }) => {
+            if (!token) {
+                throw new Error('Authentication token unavailable');
+            }
+
+            for (const file of files) {
+                await api.uploadCharacterImage(token, characterId, file);
+            }
+        },
+        onSuccess: async () => {
+            toast.success('Reference images uploaded');
+            await queryClient.invalidateQueries({ queryKey: ['characters'] });
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to upload images');
+        },
+    });
+
+    const trainModelMutation = useMutation({
+        mutationFn: async (characterId: string) => {
+            if (!token) throw new Error('Authentication token unavailable');
+            return api.trainCharacter(token, characterId, { trainingPreset: 'default' });
+        },
+        onSuccess: async () => {
+            toast.success('Model training started');
+            await queryClient.invalidateQueries({ queryKey: ['characters'] });
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to start training');
         },
     });
 
@@ -142,6 +185,46 @@ export default function CharactersPage() {
                                 <p className="text-sm text-white/40 mt-1">
                                     {character.imageCount} datasets • {character.characterType}
                                 </p>
+                                <div className="mt-4 flex gap-2">
+                                    <label className="btn-secondary flex-1 cursor-pointer text-center">
+                                        <Upload className="w-4 h-4 mr-2 inline-flex" />
+                                        Upload
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            multiple
+                                            className="hidden"
+                                            onChange={(event) => {
+                                                const files = Array.from(event.target.files || []);
+                                                if (files.length > 0) {
+                                                    uploadDatasetMutation.mutate({
+                                                        characterId: character.id,
+                                                        files,
+                                                    });
+                                                }
+
+                                                event.currentTarget.value = '';
+                                            }}
+                                        />
+                                    </label>
+                                    {character.imageCount > 0 && (
+                                        <button
+                                            onClick={() => trainModelMutation.mutate(character.id)}
+                                            disabled={trainModelMutation.isPending}
+                                            className="btn-secondary flex-1 text-center"
+                                        >
+                                            <Cpu className="w-4 h-4 mr-2 inline-flex" />
+                                            Train
+                                        </button>
+                                    )}
+                                    <Link
+                                        href={`/dashboard/generate?characterId=${character.id}`}
+                                        className="btn-primary flex-1 text-center"
+                                    >
+                                        <Sparkles className="w-4 h-4 mr-2 inline-flex" />
+                                        Use
+                                    </Link>
+                                </div>
                             </div>
                         </div>
                     ))}

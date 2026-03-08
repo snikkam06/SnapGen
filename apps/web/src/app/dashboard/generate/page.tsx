@@ -63,16 +63,19 @@ export default function GeneratePage() {
 function GeneratePageContent() {
     const searchParams = useSearchParams();
     const initialJobId = searchParams.get('job');
+    const initialCharacterId = searchParams.get('characterId');
     const [prompt, setPrompt] = useState('');
     const [negativePrompt, setNegativePrompt] = useState('');
     const [selectedStyle, setSelectedStyle] = useState(stylePacks[0].id);
-    const [selectedCharacterId, setSelectedCharacterId] = useState('');
+    const [selectedCharacterId, setSelectedCharacterId] = useState(initialCharacterId || '');
     const [aspectRatio, setAspectRatio] = useState('1:1');
     const [numImages, setNumImages] = useState(4);
     const [guidance, setGuidance] = useState(7.0);
     const [seed, setSeed] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId);
+    const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
+    const [jobTimedOut, setJobTimedOut] = useState(false);
     const tokenQuery = useApiToken();
     const queryClient = useQueryClient();
     const token = tokenQuery.data;
@@ -80,6 +83,10 @@ function GeneratePageContent() {
     useEffect(() => {
         setActiveJobId(initialJobId);
     }, [initialJobId]);
+
+    useEffect(() => {
+        setSelectedCharacterId(initialCharacterId || '');
+    }, [initialCharacterId]);
 
     const charactersQuery = useQuery({
         queryKey: ['characters', token],
@@ -92,7 +99,12 @@ function GeneratePageContent() {
         enabled: !!token && !!activeJobId,
         refetchInterval: (query) => {
             const status = (query.state.data as JobDetail | undefined)?.status;
-            return status === 'completed' || status === 'failed' ? false : 4000;
+            if (status === 'completed' || status === 'failed') return false;
+            if (jobStartedAt && Date.now() - jobStartedAt > 5 * 60 * 1000) {
+                setJobTimedOut(true);
+                return false;
+            }
+            return 4000;
         },
         queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
     });
@@ -117,6 +129,8 @@ function GeneratePageContent() {
         },
         onSuccess: async (job) => {
             setActiveJobId(job.id);
+            setJobStartedAt(Date.now());
+            setJobTimedOut(false);
             toast.success('Image generation started');
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['jobs'] }),
@@ -150,6 +164,20 @@ function GeneratePageContent() {
                                 <Sparkles className="w-6 h-6 text-purple-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                             </div>
                             <p className="text-white/40 text-sm">Generating your images...</p>
+                        </div>
+                    ) : jobTimedOut ? (
+                        <div className="glass-card aspect-[4/3] flex flex-col items-center justify-center gap-4 px-8 text-center">
+                            <ImageIcon className="w-16 h-16 text-yellow-400/40" />
+                            <p className="text-white/70 text-sm">
+                                Generation timed out after 5 minutes. The job may still be processing in the background.
+                            </p>
+                            <button
+                                onClick={() => { setJobTimedOut(false); setJobStartedAt(Date.now()); void jobQuery.refetch(); }}
+                                className="btn-secondary text-sm"
+                            >
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Retry Polling
+                            </button>
                         </div>
                     ) : jobQuery.data?.status === 'failed' ? (
                         <div className="glass-card aspect-[4/3] flex flex-col items-center justify-center gap-4 px-8 text-center">

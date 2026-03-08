@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { STORAGE_BUCKETS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -37,27 +37,47 @@ export class CharacterService {
         if (!user) throw new NotFoundException('User not found');
 
         const characters = await this.prisma.character.findMany({
-            where: { userId: user.id },
+            where: { userId: user.id, status: { not: 'deleted' } },
             orderBy: { createdAt: 'desc' },
             include: {
-                _count: {
-                    select: {
-                        datasets: true,
-                    },
+                datasets: {
+                    select: { imageCount: true },
                 },
             },
         });
 
-        return characters.map((character) => ({
-            id: character.id,
-            name: character.name,
-            slug: character.slug,
-            characterType: character.characterType,
-            status: character.status,
-            coverUrl: null,
-            imageCount: character._count.datasets,
-            createdAt: character.createdAt.toISOString(),
-        }));
+        // Resolve cover URLs
+        const coverAssetIds = characters
+            .map((c) => c.coverAssetId)
+            .filter((id): id is string => id !== null);
+
+        const coverAssets = coverAssetIds.length > 0
+            ? await this.prisma.asset.findMany({
+                where: { id: { in: coverAssetIds } },
+                select: { id: true, storageBucket: true, storageKey: true },
+            })
+            : [];
+
+        const coverMap = new Map(coverAssets.map((a) => [a.id, a]));
+
+        return characters.map((character) => {
+            const coverAsset = character.coverAssetId
+                ? coverMap.get(character.coverAssetId)
+                : null;
+
+            return {
+                id: character.id,
+                name: character.name,
+                slug: character.slug,
+                characterType: character.characterType,
+                status: character.status,
+                coverUrl: coverAsset
+                    ? this.storageService.getFileUrl(coverAsset.storageBucket, coverAsset.storageKey)
+                    : null,
+                imageCount: character.datasets.reduce((sum, d) => sum + d.imageCount, 0),
+                createdAt: character.createdAt.toISOString(),
+            };
+        });
     }
 
     async findOne(clerkUserId: string, id: string) {
@@ -138,6 +158,23 @@ export class CharacterService {
             },
         });
 
+        await this.prisma.characterDataset.create({
+            data: {
+                characterId: character.id,
+                status: 'uploaded',
+                imageCount: 1,
+                validationReport: {
+                    assetId: asset.id,
+                    fileName: data.fileName,
+                } as Prisma.InputJsonValue,
+            },
+        });
+
+        await this.prisma.character.update({
+            where: { id: character.id },
+            data: { status: 'ready' },
+        });
+
         return {
             assetId: asset.id,
             uploadUrl: await this.storageService.getSignedUploadUrl(
@@ -152,18 +189,79 @@ export class CharacterService {
         };
     }
 
+    async uploadDataset(clerkUserId: string, characterId: string, file: { originalname: string; mimetype: string; size: number; buffer: Buffer }) {
+        if (!file) throw new BadRequestException('No file provided');
+
+        const character = await this.findOne(clerkUserId, characterId);
+        const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+        if (!user) throw new NotFoundException('User not found');
+
+        const bucket = process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.uploads;
+        const storageKey = `users/${user.id}/characters/${character.id}/datasets/${Date.now()}-${file.originalname}`;
+
+        // Save the file
+        await this.storageService.saveFileLocally(bucket, storageKey, file.buffer);
+
+        // Create asset record
+        const asset = await this.prisma.asset.create({
+            data: {
+                userId: user.id,
+                kind: 'dataset-image',
+                storageBucket: bucket,
+                storageKey,
+                mimeType: file.mimetype,
+                fileSizeBytes: BigInt(file.size),
+                moderationStatus: 'approved',
+            },
+        });
+
+        // Create dataset record
+        await this.prisma.characterDataset.create({
+            data: {
+                characterId: character.id,
+                status: 'uploaded',
+                imageCount: 1,
+                validationReport: {
+                    assetId: asset.id,
+                    fileName: file.originalname,
+                } as Prisma.InputJsonValue,
+            },
+        });
+
+        // Update character status and set cover if first image
+        const rawCharacter = await this.prisma.character.findUnique({
+            where: { id: character.id },
+        });
+
+        await this.prisma.character.update({
+            where: { id: character.id },
+            data: {
+                status: 'ready',
+                ...(!rawCharacter?.coverAssetId ? { coverAssetId: asset.id } : {}),
+            },
+        });
+
+        return {
+            assetId: asset.id,
+            imageUrl: this.storageService.getFileUrl(bucket, storageKey),
+        };
+    }
+
     async trainModel(clerkUserId: string, characterId: string, data: { trainingPreset: string }) {
         const character = await this.findOne(clerkUserId, characterId);
+        const provider = this.getCharacterProvider();
+        const usesGeminiReferenceMode = provider === 'google' || provider === 'gemini' || provider === 'stability';
 
         const model = await this.prisma.characterModel.create({
             data: {
                 characterId: character.id,
-                provider: 'fal',
-                modelType: 'lora',
+                provider,
+                modelType: usesGeminiReferenceMode ? 'reference-set' : 'lora',
                 versionTag: `v${Date.now().toString(36)}`,
-                status: 'queued',
+                status: usesGeminiReferenceMode ? 'ready' : 'queued',
                 metadataJson: {
                     trainingPreset: data.trainingPreset,
+                    mode: usesGeminiReferenceMode ? 'reference-images' : 'lora-training',
                 } as Prisma.InputJsonValue,
             },
         });
@@ -171,9 +269,28 @@ export class CharacterService {
         // Update character status
         await this.prisma.character.update({
             where: { id: character.id },
-            data: { status: 'training', latestModelId: model.id },
+            data: {
+                status: usesGeminiReferenceMode ? 'ready' : 'training',
+                latestModelId: model.id,
+            },
         });
 
         return model;
+    }
+
+    private getCharacterProvider(): string {
+        if (process.env.IMAGE_PROVIDER === 'google' || process.env.IMAGE_PROVIDER === 'gemini') {
+            return 'google';
+        }
+
+        if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+            return 'google';
+        }
+
+        if (process.env.IMAGE_PROVIDER) {
+            return process.env.IMAGE_PROVIDER;
+        }
+
+        return 'fal';
     }
 }

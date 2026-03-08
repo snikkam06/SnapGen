@@ -9,7 +9,11 @@ export function useApiToken() {
     return useQuery({
         queryKey: ['api-token', userId],
         enabled: isLoaded && !!userId,
-        staleTime: 5 * 60 * 1000,
+        staleTime: 0,
+        refetchInterval: 30 * 1000,
+        refetchIntervalInBackground: true,
+        refetchOnMount: true,
+        refetchOnWindowFocus: true,
         queryFn: async () => {
             const token = await getToken();
             if (!token) {
