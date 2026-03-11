@@ -257,18 +257,22 @@ export class CharacterService {
     async trainModel(clerkUserId: string, characterId: string, data: { trainingPreset: string }) {
         const character = await this.findOne(clerkUserId, characterId);
         const provider = this.getCharacterProvider();
-        const usesGeminiReferenceMode = provider === 'google' || provider === 'gemini' || provider === 'stability';
+        const usesReferenceMode =
+            provider === 'fal' ||
+            provider === 'google' ||
+            provider === 'gemini' ||
+            provider === 'stability';
 
         const model = await this.prisma.characterModel.create({
             data: {
                 characterId: character.id,
                 provider,
-                modelType: usesGeminiReferenceMode ? 'reference-set' : 'lora',
+                modelType: usesReferenceMode ? 'reference-set' : 'lora',
                 versionTag: `v${Date.now().toString(36)}`,
-                status: usesGeminiReferenceMode ? 'ready' : 'queued',
+                status: usesReferenceMode ? 'ready' : 'queued',
                 metadataJson: {
                     trainingPreset: data.trainingPreset,
-                    mode: usesGeminiReferenceMode ? 'reference-images' : 'lora-training',
+                    mode: usesReferenceMode ? 'reference-images' : 'lora-training',
                 } as Prisma.InputJsonValue,
             },
         });
@@ -277,7 +281,7 @@ export class CharacterService {
         await this.prisma.character.update({
             where: { id: character.id },
             data: {
-                status: usesGeminiReferenceMode ? 'ready' : 'training',
+                status: usesReferenceMode ? 'ready' : 'training',
                 latestModelId: model.id,
             },
         });
@@ -286,6 +290,10 @@ export class CharacterService {
     }
 
     private getCharacterProvider(): string {
+        if (process.env.IMAGE_PROVIDER === 'fal' || process.env.FAL_API_KEY) {
+            return 'fal';
+        }
+
         if (process.env.IMAGE_PROVIDER === 'google' || process.env.IMAGE_PROVIDER === 'gemini') {
             return 'google';
         }

@@ -5,86 +5,104 @@ import { GenerationService } from '../generation/generation.service';
 
 @Injectable()
 export class JobService {
-    constructor(
-        private prisma: PrismaService,
-        private storageService: StorageService,
-        private generationService: GenerationService,
-    ) { }
+  constructor(
+    private prisma: PrismaService,
+    private storageService: StorageService,
+    private generationService: GenerationService,
+  ) {}
 
-    async findAll(clerkUserId: string, filters?: { status?: string; jobType?: string }) {
-        const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
-        if (!user) throw new NotFoundException('User not found');
+  async findAll(clerkUserId: string, filters?: { status?: string; jobType?: string }) {
+    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    if (!user) throw new NotFoundException('User not found');
 
-        const where: Record<string, unknown> = { userId: user.id };
-        if (filters?.status) where.status = filters.status;
-        if (filters?.jobType) where.jobType = filters.jobType;
+    const where: Record<string, unknown> = { userId: user.id };
+    if (filters?.status) where.status = filters.status;
+    if (filters?.jobType) where.jobType = filters.jobType;
 
-        const jobs = await this.prisma.generationJob.findMany({
-            where,
-            orderBy: { createdAt: 'desc' },
-            take: 50,
-        });
+    const jobs = await this.prisma.generationJob.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
 
-        return jobs.map((job) => ({
-            ...job,
-            createdAt: job.createdAt.toISOString(),
-            completedAt: job.completedAt?.toISOString() || null,
-        }));
+    for (const job of jobs) {
+      if (job.status !== 'queued') {
+        continue;
+      }
+
+      if (job.jobType === 'image') {
+        void this.generationService.ensureImageJobProcessing(job.id);
+      }
+
+      if (job.jobType === 'video') {
+        void this.generationService.ensureVideoJobProcessing(job.id);
+      }
     }
 
-    async findOne(clerkUserId: string, id: string) {
-        const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
-        if (!user) throw new NotFoundException('User not found');
+    return jobs.map((job) => ({
+      ...job,
+      createdAt: job.createdAt.toISOString(),
+      completedAt: job.completedAt?.toISOString() || null,
+    }));
+  }
 
-        const job = await this.prisma.generationJob.findUnique({
-            where: { id },
-            include: {
-                jobAssets: {
-                    include: { asset: true },
-                },
-            },
-        });
+  async findOne(clerkUserId: string, id: string) {
+    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    if (!user) throw new NotFoundException('User not found');
 
-        if (!job) throw new NotFoundException('Job not found');
-        if (job.userId !== user.id) throw new ForbiddenException();
+    const job = await this.prisma.generationJob.findUnique({
+      where: { id },
+      include: {
+        jobAssets: {
+          include: { asset: true },
+        },
+      },
+    });
 
-        if (job.jobType === 'image' && job.status === 'queued') {
-            void this.generationService.ensureImageJobProcessing(job.id);
-        }
+    if (!job) throw new NotFoundException('Job not found');
+    if (job.userId !== user.id) throw new ForbiddenException();
 
-        return {
-            id: job.id,
-            jobType: job.jobType,
-            status: job.status,
-            prompt: job.prompt,
-            provider: job.provider,
-            reservedCredits: job.reservedCredits,
-            finalCredits: job.finalCredits,
-            createdAt: job.createdAt.toISOString(),
-            completedAt: job.completedAt?.toISOString() || null,
-            characterId: job.characterId,
-            stylePackId: job.stylePackId,
-            negativePrompt: job.negativePrompt,
-            settingsJson: job.settingsJson,
-            externalJobId: job.externalJobId,
-            errorMessage: job.errorMessage,
-            startedAt: job.startedAt?.toISOString() || null,
-            failedAt: job.failedAt?.toISOString() || null,
-            outputs: await Promise.all(
-                job.jobAssets
-                    .filter((jobAsset) => jobAsset.relation === 'output')
-                    .map(async ({ asset }) => {
-                        return {
-                            id: asset.id,
-                            kind: asset.kind,
-                            mimeType: asset.mimeType,
-                            width: asset.width,
-                            height: asset.height,
-                            url: await this.storageService.getAssetUrl(asset),
-                            createdAt: asset.createdAt.toISOString(),
-                        };
-                    }),
-            ),
-        };
+    if (job.jobType === 'image' && job.status === 'queued') {
+      void this.generationService.ensureImageJobProcessing(job.id);
     }
+
+    if (job.jobType === 'video' && job.status === 'queued') {
+      void this.generationService.ensureVideoJobProcessing(job.id);
+    }
+
+    return {
+      id: job.id,
+      jobType: job.jobType,
+      status: job.status,
+      prompt: job.prompt,
+      provider: job.provider,
+      reservedCredits: job.reservedCredits,
+      finalCredits: job.finalCredits,
+      createdAt: job.createdAt.toISOString(),
+      completedAt: job.completedAt?.toISOString() || null,
+      characterId: job.characterId,
+      stylePackId: job.stylePackId,
+      negativePrompt: job.negativePrompt,
+      settingsJson: job.settingsJson,
+      externalJobId: job.externalJobId,
+      errorMessage: job.errorMessage,
+      startedAt: job.startedAt?.toISOString() || null,
+      failedAt: job.failedAt?.toISOString() || null,
+      outputs: await Promise.all(
+        job.jobAssets
+          .filter((jobAsset) => jobAsset.relation === 'output')
+          .map(async ({ asset }) => {
+            return {
+              id: asset.id,
+              kind: asset.kind,
+              mimeType: asset.mimeType,
+              width: asset.width,
+              height: asset.height,
+              url: await this.storageService.getAssetUrl(asset),
+              createdAt: asset.createdAt.toISOString(),
+            };
+          }),
+      ),
+    };
+  }
 }
