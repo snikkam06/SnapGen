@@ -309,6 +309,9 @@ function GeneratePageContent() {
                   </option>
                 ))}
               </select>
+              <p className="mt-2 text-xs text-white/40">
+                Character-based generations prefer fal.ai when it is configured.
+              </p>
             </div>
 
             <div>
