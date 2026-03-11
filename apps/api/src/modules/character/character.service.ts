@@ -60,7 +60,7 @@ export class CharacterService {
 
         const coverMap = new Map(coverAssets.map((a) => [a.id, a]));
 
-        return characters.map((character) => {
+        return Promise.all(characters.map(async (character) => {
             const coverAsset = character.coverAssetId
                 ? coverMap.get(character.coverAssetId)
                 : null;
@@ -72,12 +72,15 @@ export class CharacterService {
                 characterType: character.characterType,
                 status: character.status,
                 coverUrl: coverAsset
-                    ? this.storageService.getFileUrl(coverAsset.storageBucket, coverAsset.storageKey)
+                    ? await this.storageService.getSignedDownloadUrl(
+                        coverAsset.storageBucket,
+                        coverAsset.storageKey,
+                    )
                     : null,
                 imageCount: character.datasets.reduce((sum, d) => sum + d.imageCount, 0),
                 createdAt: character.createdAt.toISOString(),
             };
-        });
+        }));
     }
 
     async findOne(clerkUserId: string, id: string) {
@@ -199,8 +202,12 @@ export class CharacterService {
         const bucket = process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.uploads;
         const storageKey = `users/${user.id}/characters/${character.id}/datasets/${Date.now()}-${file.originalname}`;
 
-        // Save the file
-        await this.storageService.saveFileLocally(bucket, storageKey, file.buffer);
+        await this.storageService.saveBuffer(
+            bucket,
+            storageKey,
+            file.buffer,
+            file.mimetype,
+        );
 
         // Create asset record
         const asset = await this.prisma.asset.create({
@@ -243,7 +250,7 @@ export class CharacterService {
 
         return {
             assetId: asset.id,
-            imageUrl: this.storageService.getFileUrl(bucket, storageKey),
+            imageUrl: await this.storageService.getSignedDownloadUrl(bucket, storageKey),
         };
     }
 

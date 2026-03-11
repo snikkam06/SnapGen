@@ -190,6 +190,9 @@ importers:
 
   apps/worker-media:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.637.0
+        version: 3.1003.0
       '@prisma/client':
         specifier: ^5.20.0
         version: 5.22.0(prisma@5.22.0)
@@ -212,6 +215,9 @@ importers:
         specifier: ^16.4.5
         version: 16.6.1
     devDependencies:
+      dotenv-cli:
+        specifier: ^7.4.2
+        version: 7.4.4
       prisma:
         specifier: ^5.20.0
         version: 5.22.0

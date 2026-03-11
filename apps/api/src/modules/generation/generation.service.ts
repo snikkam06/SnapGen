@@ -451,16 +451,24 @@ export class GenerationService {
         outputs: Array<{ url: string; mimeType: string }>,
     ): Promise<void> {
         for (const output of outputs) {
+            const bucket = process.env.R2_BUCKET_OUTPUTS || 'outputs-private';
+            const storageKey = `users/${userId}/jobs/${jobId}/outputs/${Date.now()}.${this.getExtensionForMimeType(output.mimeType, 'png')}`;
+            const savedOutput = await this.storageService.saveFromUrl(
+                bucket,
+                storageKey,
+                output.url,
+                output.mimeType,
+            );
             const asset = await this.prisma.asset.create({
                 data: {
                     userId,
                     kind: 'generated-image',
-                    storageBucket: process.env.R2_BUCKET_OUTPUTS || 'outputs-private',
-                    storageKey: `users/${userId}/jobs/${jobId}/outputs/${Date.now()}.png`,
-                    mimeType: output.mimeType,
-                    fileSizeBytes: BigInt(0),
+                    storageBucket: bucket,
+                    storageKey,
+                    mimeType: savedOutput.contentType,
+                    fileSizeBytes: BigInt(savedOutput.sizeBytes),
                     moderationStatus: 'approved',
-                    metadataJson: { sourceUrl: output.url },
+                    metadataJson: { providerUrl: output.url },
                 },
             });
 
@@ -472,6 +480,21 @@ export class GenerationService {
                 },
             });
         }
+    }
+
+    private getExtensionForMimeType(mimeType: string, fallback: string): string {
+        const extensionMap: Record<string, string> = {
+            'image/jpeg': 'jpg',
+            'image/png': 'png',
+            'image/webp': 'webp',
+            'image/gif': 'gif',
+            'image/svg+xml': 'svg',
+            'video/mp4': 'mp4',
+            'video/webm': 'webm',
+            'video/quicktime': 'mov',
+        };
+
+        return extensionMap[mimeType] || fallback;
     }
 
     private getVideoProvider(): string {
@@ -542,16 +565,24 @@ export class GenerationService {
             }
 
             for (const output of jobResult.outputs) {
+                const bucket = process.env.R2_BUCKET_OUTPUTS || 'outputs-private';
+                const storageKey = `users/${genJob.userId}/jobs/${jobId}/outputs/${Date.now()}.${this.getExtensionForMimeType(output.mimeType, 'mp4')}`;
+                const savedOutput = await this.storageService.saveFromUrl(
+                    bucket,
+                    storageKey,
+                    output.url,
+                    output.mimeType,
+                );
                 const asset = await this.prisma.asset.create({
                     data: {
                         userId: genJob.userId,
                         kind: 'generated-video',
-                        storageBucket: process.env.R2_BUCKET_OUTPUTS || 'outputs-private',
-                        storageKey: `users/${genJob.userId}/jobs/${jobId}/outputs/${Date.now()}.mp4`,
-                        mimeType: output.mimeType,
-                        fileSizeBytes: BigInt(0),
+                        storageBucket: bucket,
+                        storageKey,
+                        mimeType: savedOutput.contentType,
+                        fileSizeBytes: BigInt(savedOutput.sizeBytes),
                         moderationStatus: 'approved',
-                        metadataJson: { sourceUrl: output.url },
+                        metadataJson: { providerUrl: output.url },
                     },
                 });
 

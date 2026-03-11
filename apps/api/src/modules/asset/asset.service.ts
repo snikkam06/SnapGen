@@ -65,21 +65,13 @@ export class AssetService {
         storageKey: string;
         metadataJson: unknown;
     }) {
-        const metadata = asset.metadataJson as Record<string, unknown> | null;
-        const sourceUrl = typeof metadata?.sourceUrl === 'string' ? metadata.sourceUrl : null;
-
         return {
             id: asset.id,
             kind: asset.kind,
             mimeType: asset.mimeType,
             width: asset.width,
             height: asset.height,
-            url:
-                sourceUrl ||
-                (await this.storageService.getSignedDownloadUrl(
-                    asset.storageBucket,
-                    asset.storageKey,
-                )),
+            url: await this.storageService.getAssetUrl(asset),
             createdAt: asset.createdAt.toISOString(),
         };
     }

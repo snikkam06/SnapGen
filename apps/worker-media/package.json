@@ -3,14 +3,15 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" tsx --watch src/index.ts",
+        "dev": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../api/.env -- tsx --watch src/index.ts",
         "build": "tsc",
-        "start": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" node dist/index.js",
+        "start": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../api/.env -- node dist/index.js",
         "clean": "rm -rf dist",
         "typecheck": "tsc --noEmit",
         "lint": "echo 'no lint configured'"
     },
     "dependencies": {
+        "@aws-sdk/client-s3": "^3.637.0",
         "bullmq": "^5.12.0",
         "@prisma/client": "^5.20.0",
         "dotenv": "^16.4.5",
@@ -20,6 +21,7 @@
         "@snapgen/types": "workspace:*"
     },
     "devDependencies": {
+        "dotenv-cli": "^7.4.2",
         "tsx": "^4.19.0",
         "typescript": "^5.5.0",
         "prisma": "^5.20.0"

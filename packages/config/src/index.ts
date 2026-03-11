@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 // ─── App configuration constants ─────────────────────
 
 export const APP_NAME = 'SnapGen';
@@ -98,4 +101,39 @@ export function getRedisConnectionConfig(
         ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
         maxRetriesPerRequest: null,
     };
+}
+
+export function findWorkspaceRoot(startDir = process.cwd()): string {
+    let currentDir = path.resolve(startDir);
+
+    while (true) {
+        if (fs.existsSync(path.join(currentDir, 'pnpm-workspace.yaml'))) {
+            return currentDir;
+        }
+
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) {
+            return path.resolve(startDir);
+        }
+
+        currentDir = parentDir;
+    }
+}
+
+export function getLocalStorageDir(startDir = process.cwd()): string {
+    if (process.env.STORAGE_LOCAL_DIR) {
+        return path.resolve(process.env.STORAGE_LOCAL_DIR);
+    }
+
+    return path.join(findWorkspaceRoot(startDir), 'uploads');
+}
+
+export function getLegacyLocalStorageDirs(startDir = process.cwd()): string[] {
+    const workspaceRoot = findWorkspaceRoot(startDir);
+    const primaryDir = getLocalStorageDir(startDir);
+
+    return [
+        path.join(workspaceRoot, 'apps/api/uploads'),
+        path.join(workspaceRoot, 'apps/worker-media/uploads'),
+    ].filter((dir) => dir !== primaryDir);
 }

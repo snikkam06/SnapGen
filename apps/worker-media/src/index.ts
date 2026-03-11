@@ -1,12 +1,48 @@
-import 'dotenv/config';
 import net from 'node:net';
+import path from 'node:path';
+import fsSync from 'node:fs';
+import fs from 'node:fs/promises';
+import dotenv from 'dotenv';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { createImageAdapter } from '@snapgen/media-adapters';
-import { getRedisConnectionConfig } from '@snapgen/config';
+import { getLocalStorageDir, getRedisConnectionConfig } from '@snapgen/config';
+
+function loadWorkerEnv(): void {
+    const candidatePaths = [
+        path.resolve(process.cwd(), '.env'),
+        path.resolve(process.cwd(), '../api/.env'),
+        path.resolve(process.cwd(), '../../apps/api/.env'),
+        path.resolve(__dirname, '../.env'),
+        path.resolve(__dirname, '../../api/.env'),
+    ];
+
+    for (const candidatePath of candidatePaths) {
+        if (fsSync.existsSync(candidatePath)) {
+            dotenv.config({ path: candidatePath, override: false });
+        }
+    }
+}
+
+loadWorkerEnv();
 
 const prisma = new PrismaClient();
 const connection = getRedisConnectionConfig(process.env.REDIS_URL);
+const s3 =
+    process.env.R2_ACCOUNT_ID &&
+    process.env.R2_ACCESS_KEY_ID &&
+    process.env.R2_SECRET_ACCESS_KEY &&
+    process.env.STORAGE_MODE !== 'local'
+        ? new S3Client({
+            region: 'auto',
+            endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+            credentials: {
+                accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+                secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+            },
+        })
+        : null;
 
 function getImageProviderApiKey(provider: string): string {
     switch (provider) {
@@ -74,6 +110,60 @@ async function isRedisReachable(): Promise<boolean> {
     });
 }
 
+function getExtensionForMimeType(mimeType: string, fallback: string): string {
+    const extensionMap: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'image/svg+xml': 'svg',
+    };
+
+    return extensionMap[mimeType] || fallback;
+}
+
+async function persistRemoteOutput(
+    bucket: string,
+    key: string,
+    url: string,
+    contentType: string,
+): Promise<{ contentType: string; sizeBytes: number; metadataJson: Record<string, string> }> {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to download remote file: ${response.status} ${response.statusText}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const resolvedContentType =
+        contentType ||
+        response.headers.get('content-type') ||
+        'application/octet-stream';
+
+    if (s3) {
+        await s3.send(
+            new PutObjectCommand({
+                Bucket: bucket,
+                Key: key,
+                Body: buffer,
+                ContentType: resolvedContentType,
+            }),
+        );
+    } else {
+        // Fallback: save to local filesystem
+        const filePath = path.join(getLocalStorageDir(__dirname), bucket, key);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, buffer);
+        console.warn(`[Worker] S3 not configured. Saved file locally: ${filePath}`);
+    }
+
+    return {
+        contentType: resolvedContentType,
+        sizeBytes: buffer.byteLength,
+        metadataJson: { providerUrl: url },
+    };
+}
+
 async function bootstrap() {
     if (!(await isRedisReachable())) {
         console.warn('Redis is unavailable. Media worker is disabled.');
@@ -138,16 +228,24 @@ async function bootstrap() {
                 }
 
                 for (const output of jobResult.outputs) {
+                    const bucket = process.env.R2_BUCKET_OUTPUTS || 'outputs-private';
+                    const storageKey = `users/${genJob.userId}/jobs/${jobId}/outputs/${Date.now()}.${getExtensionForMimeType(output.mimeType, 'png')}`;
+                    const savedOutput = await persistRemoteOutput(
+                        bucket,
+                        storageKey,
+                        output.url,
+                        output.mimeType,
+                    );
                     const asset = await prisma.asset.create({
                         data: {
                             userId: genJob.userId,
                             kind: 'generated-image',
-                            storageBucket: process.env.R2_BUCKET_OUTPUTS || 'outputs-private',
-                            storageKey: `users/${genJob.userId}/jobs/${jobId}/outputs/${Date.now()}.png`,
-                            mimeType: output.mimeType,
-                            fileSizeBytes: BigInt(0),
+                            storageBucket: bucket,
+                            storageKey,
+                            mimeType: savedOutput.contentType,
+                            fileSizeBytes: BigInt(savedOutput.sizeBytes),
                             moderationStatus: 'approved',
-                            metadataJson: { sourceUrl: output.url },
+                            metadataJson: savedOutput.metadataJson,
                         },
                     });
 
