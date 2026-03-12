@@ -119,15 +119,27 @@ export class GenerationService {
     }
 
     // Resolve source asset URL if provided
+    let sourceAssetId: string | undefined;
     let sourceImageUrl: string | undefined;
     if (data.sourceAssetId) {
-      const asset = await this.prisma.asset.findUnique({ where: { id: data.sourceAssetId } });
-      if (asset) {
-        sourceImageUrl = await this.storageService.getSignedDownloadUrl(
-          asset.storageBucket,
-          asset.storageKey,
-        );
+      const asset = await this.prisma.asset.findFirst({
+        where: {
+          id: data.sourceAssetId,
+          userId: user.id,
+          moderationStatus: { not: 'deleted' },
+        },
+      });
+
+      if (!asset) {
+        throw new NotFoundException('Source image not found');
       }
+
+      if (!asset.mimeType.startsWith('image/')) {
+        throw new BadRequestException('Source asset must be an image');
+      }
+
+      sourceAssetId = asset.id;
+      sourceImageUrl = await this.storageService.getAssetUrl(asset);
     }
 
     await this.prisma.creditLedger.create({
@@ -148,13 +160,23 @@ export class GenerationService {
         prompt: data.prompt,
         settingsJson: {
           ...data.settings,
-          sourceAssetId: data.sourceAssetId,
+          sourceAssetId,
           sourceImageUrl,
         } as Prisma.InputJsonValue,
         provider,
         reservedCredits: totalCost,
       },
     });
+
+    if (sourceAssetId) {
+      await this.prisma.jobAsset.create({
+        data: {
+          jobId: job.id,
+          assetId: sourceAssetId,
+          relation: 'input',
+        },
+      });
+    }
 
     if (this.videoQueue) {
       if (!(await this.hasActiveVideoWorkers())) {

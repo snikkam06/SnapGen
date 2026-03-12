@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+    Injectable,
+    NotFoundException,
+    ForbiddenException,
+    BadRequestException,
+} from '@nestjs/common';
+import { STORAGE_BUCKETS, UPLOAD_LIMITS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -15,7 +21,10 @@ export class AssetService {
 
         const page = params?.page || 1;
         const limit = params?.limit || 20;
-        const where: Record<string, unknown> = { userId: user.id };
+        const where: Record<string, unknown> = {
+            userId: user.id,
+            moderationStatus: { not: 'deleted' },
+        };
         if (params?.kind) where.kind = params.kind;
 
         const [items, total] = await Promise.all([
@@ -37,6 +46,56 @@ export class AssetService {
             limit,
             totalPages: Math.ceil(total / limit),
         };
+    }
+
+    async uploadImage(
+        clerkUserId: string,
+        file: {
+            originalname: string;
+            mimetype: string;
+            size: number;
+            buffer: Buffer;
+        },
+    ) {
+        if (!file) {
+            throw new BadRequestException('No file provided');
+        }
+
+        const allowedImageTypes = UPLOAD_LIMITS.allowedImageTypes as readonly string[];
+        if (!allowedImageTypes.includes(file.mimetype)) {
+            throw new BadRequestException('Please upload a JPEG, PNG, or WebP image');
+        }
+
+        if (file.size > UPLOAD_LIMITS.maxFileSizeBytes) {
+            throw new BadRequestException('File size must be under 50MB');
+        }
+
+        const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+        if (!user) throw new NotFoundException('User not found');
+
+        const bucket = process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.uploads;
+        const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '-');
+        const storageKey = `users/${user.id}/uploads/images/${Date.now()}-${sanitizedFileName}`;
+
+        await this.storageService.saveBuffer(bucket, storageKey, file.buffer, file.mimetype);
+
+        const asset = await this.prisma.asset.create({
+            data: {
+                userId: user.id,
+                kind: 'uploaded-image',
+                storageBucket: bucket,
+                storageKey,
+                mimeType: file.mimetype,
+                fileSizeBytes: BigInt(file.size),
+                moderationStatus: 'approved',
+                metadataJson: {
+                    originalFileName: file.originalname,
+                    uploadSource: 'user',
+                },
+            },
+        });
+
+        return this.serializeAsset(asset);
     }
 
     async remove(clerkUserId: string, id: string) {

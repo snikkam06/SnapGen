@@ -157,6 +157,26 @@ class ApiClient {
         return this.request(`/v1/assets${query}`, { token });
     }
 
+    async uploadImageAsset(token: string, file: File) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${this.baseUrl}/v1/assets/upload`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ message: 'Upload failed' }));
+            throw new Error(error.message || `Upload failed: ${response.status}`);
+        }
+
+        return response.json();
+    }
+
     async deleteAsset(token: string, id: string) {
         return this.request(`/v1/assets/${id}`, { method: 'DELETE', token });
     }

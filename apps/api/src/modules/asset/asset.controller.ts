@@ -1,5 +1,16 @@
-import { Controller, Get, Delete, Param, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import {
+    Controller,
+    Get,
+    Delete,
+    Param,
+    Query,
+    UseGuards,
+    Post,
+    UseInterceptors,
+    UploadedFile,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { AssetService } from './asset.service';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
 import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
@@ -24,6 +35,22 @@ export class AssetController {
             page: page ? parseInt(page) : undefined,
             limit: limit ? parseInt(limit) : undefined,
         });
+    }
+
+    @Post('upload')
+    @ApiOperation({ summary: 'Upload an image asset directly' })
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(FileInterceptor('file'))
+    async uploadImage(
+        @CurrentUser() user: AuthUser,
+        @UploadedFile() file: {
+            originalname: string;
+            mimetype: string;
+            size: number;
+            buffer: Buffer;
+        },
+    ) {
+        return this.assetService.uploadImage(user.clerkUserId, file);
     }
 
     @Delete(':id')

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,6 +12,7 @@ import {
   Loader2,
   Download,
   RefreshCw,
+  Video,
 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -238,6 +240,13 @@ function GeneratePageContent() {
                   <img src={image.url} alt="Generated" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                     <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2">
+                      <Link
+                        href={`/dashboard/video?sourceAssetId=${image.id}`}
+                        className="btn-ghost px-3 py-2 bg-black/40 backdrop-blur-sm rounded-lg text-xs font-medium"
+                      >
+                        <Video className="w-4 h-4 mr-1.5" />
+                        Animate
+                      </Link>
                       <a
                         href={image.url}
                         target="_blank"
