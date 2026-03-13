@@ -377,7 +377,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       seed: input.seed,
       guidance_scale: input.guidance ?? 7.0,
       num_inference_steps: input.steps ?? 28,
-      safety_tolerance: 5,
+      safety_tolerance: 6,
       loras: input.loraModelUrl ? [{ path: input.loraModelUrl, scale: 0.8 }] : undefined,
       enable_safety_checker: false,
       output_format: 'jpeg',

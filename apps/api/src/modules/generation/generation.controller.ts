@@ -22,6 +22,7 @@ export class GenerationController {
       mode?: 'base' | 'enhanced';
       prompt: string;
       negativePrompt?: string;
+      sourceAssetId?: string;
       settings?: Record<string, unknown>;
     },
   ) {

@@ -1,24 +1,28 @@
 'use client';
 
 import Link from 'next/link';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Wand2,
-  Sparkles,
-  Settings2,
-  Image as ImageIcon,
+  CheckCircle2,
   ChevronDown,
-  Loader2,
   Download,
+  Image as ImageIcon,
+  Loader2,
+  Pencil,
   RefreshCw,
+  Settings2,
+  Sparkles,
+  Upload,
   Video,
+  Wand2,
+  X,
 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { useApiToken } from '@/hooks/use-api-token';
 import { api } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 
 const stylePacks = [
   { id: 'photorealistic-portrait', name: 'Photorealistic Portrait', cost: 5 },
@@ -33,20 +37,16 @@ const generationModes = [
   {
     value: 'base',
     label: 'Base',
-    description: 'Uses fal.ai for the default image generation flow.',
+    description: 'Faster text-first generation with fal.ai.',
     maxImages: 8,
   },
   {
     value: 'enhanced',
     label: 'Enhanced',
-    description: 'Uses Gemini for stronger prompt rendering and better reference fidelity.',
+    description: 'Gemini-backed generation with stronger reference fidelity.',
     maxImages: 4,
   },
 ] as const;
-
-function getMaxImagesForMode(mode: 'base' | 'enhanced'): number {
-  return generationModes.find((entry) => entry.value === mode)?.maxImages ?? 4;
-}
 
 const aspectRatios = [
   { value: '1:1', label: '1:1', width: 'w-8', height: 'h-8' },
@@ -55,9 +55,30 @@ const aspectRatios = [
   { value: '9:16', label: '9:16', width: 'w-5', height: 'h-8' },
 ];
 
+type ImageMode = 'text' | 'edit';
+type SourceMode = 'feed' | 'upload';
+
+function getMaxImagesForMode(mode: 'base' | 'enhanced'): number {
+  return generationModes.find((entry) => entry.value === mode)?.maxImages ?? 4;
+}
+
 interface Character {
   id: string;
   name: string;
+}
+
+interface AssetItem {
+  id: string;
+  kind: string;
+  mimeType: string;
+  url: string;
+  width: number | null;
+  height: number | null;
+  createdAt: string;
+}
+
+interface AssetsResponse {
+  data: AssetItem[];
 }
 
 interface JobOutput {
@@ -91,11 +112,16 @@ function GeneratePageContent() {
   const searchParams = useSearchParams();
   const initialJobId = searchParams.get('job');
   const initialCharacterId = searchParams.get('characterId');
+  const initialSourceAssetId = searchParams.get('sourceAssetId');
+  const [imageMode, setImageMode] = useState<ImageMode>(initialSourceAssetId ? 'edit' : 'text');
+  const [sourceMode, setSourceMode] = useState<SourceMode>(initialSourceAssetId ? 'feed' : 'feed');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [selectedStyle, setSelectedStyle] = useState(stylePacks[0].id);
   const [selectedCharacterId, setSelectedCharacterId] = useState(initialCharacterId || '');
-  const [generationMode, setGenerationMode] = useState<'base' | 'enhanced'>('base');
+  const [generationMode, setGenerationMode] = useState<'base' | 'enhanced'>(
+    initialSourceAssetId ? 'enhanced' : 'base',
+  );
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [numImages, setNumImages] = useState(4);
   const [guidance, setGuidance] = useState(7.0);
@@ -104,6 +130,12 @@ function GeneratePageContent() {
   const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId);
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
   const [jobTimedOut, setJobTimedOut] = useState(false);
+  const [selectedFeedAssetId, setSelectedFeedAssetId] = useState<string | null>(
+    initialSourceAssetId,
+  );
+  const [uploadedAsset, setUploadedAsset] = useState<AssetItem | null>(null);
+  const [uploadedPreview, setUploadedPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const tokenQuery = useApiToken();
   const queryClient = useQueryClient();
   const token = tokenQuery.data;
@@ -117,6 +149,23 @@ function GeneratePageContent() {
   }, [initialCharacterId]);
 
   useEffect(() => {
+    if (!initialSourceAssetId) {
+      return;
+    }
+
+    setImageMode('edit');
+    setSourceMode('feed');
+    setGenerationMode('enhanced');
+    setSelectedFeedAssetId(initialSourceAssetId);
+  }, [initialSourceAssetId]);
+
+  useEffect(() => {
+    if (imageMode === 'edit' && generationMode !== 'enhanced') {
+      setGenerationMode('enhanced');
+    }
+  }, [generationMode, imageMode]);
+
+  useEffect(() => {
     const nextMaxImages = getMaxImagesForMode(generationMode);
     if (numImages > nextMaxImages) {
       setNumImages(nextMaxImages);
@@ -128,6 +177,45 @@ function GeneratePageContent() {
     enabled: !!token,
     queryFn: () => api.getCharacters(token as string) as Promise<Character[]>,
   });
+
+  const assetsQuery = useQuery({
+    queryKey: ['assets', token, 'image-sources'],
+    enabled: !!token && imageMode === 'edit',
+    queryFn: () => api.getAssets(token as string, { limit: '60' }) as Promise<AssetsResponse>,
+  });
+
+  const sourceAssets = useMemo(() => {
+    const assets = assetsQuery.data?.data || [];
+    return assets.filter(
+      (asset) => asset.mimeType.startsWith('image/') && asset.kind !== 'dataset-image',
+    );
+  }, [assetsQuery.data]);
+
+  const selectedFeedAsset = useMemo(
+    () => sourceAssets.find((asset) => asset.id === selectedFeedAssetId) || null,
+    [selectedFeedAssetId, sourceAssets],
+  );
+
+  const activeSourceAssetId =
+    imageMode === 'edit'
+      ? sourceMode === 'feed'
+        ? selectedFeedAssetId
+        : uploadedAsset?.id || null
+      : null;
+
+  const activeSourcePreview =
+    imageMode === 'edit'
+      ? sourceMode === 'feed'
+        ? selectedFeedAsset?.url || null
+        : uploadedPreview || uploadedAsset?.url || null
+      : null;
+
+  const activeSourceMeta =
+    imageMode === 'edit'
+      ? sourceMode === 'feed'
+        ? selectedFeedAsset
+        : uploadedAsset
+      : null;
 
   const jobQuery = useQuery({
     queryKey: ['job', token, activeJobId],
@@ -144,6 +232,24 @@ function GeneratePageContent() {
     queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
   });
 
+  const uploadSourceMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!token) throw new Error('Authentication token unavailable');
+      return api.uploadImageAsset(token, file) as Promise<AssetItem>;
+    },
+    onSuccess: async (asset) => {
+      setUploadedAsset(asset);
+      setUploadedPreview(asset.url);
+      toast.success('Source image uploaded');
+      await queryClient.invalidateQueries({ queryKey: ['assets'] });
+    },
+    onError: (error) => {
+      setUploadedAsset(null);
+      setUploadedPreview(null);
+      toast.error(error instanceof Error ? error.message : 'Failed to upload source image');
+    },
+  });
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       if (!token) {
@@ -152,9 +258,10 @@ function GeneratePageContent() {
 
       return api.generateImage(token, {
         characterId: selectedCharacterId || undefined,
-        mode: generationMode,
+        mode: imageMode === 'edit' ? 'enhanced' : generationMode,
         prompt,
         negativePrompt: negativePrompt || undefined,
+        sourceAssetId: imageMode === 'edit' ? activeSourceAssetId || undefined : undefined,
         settings: {
           aspectRatio,
           numImages,
@@ -167,7 +274,7 @@ function GeneratePageContent() {
       setActiveJobId(job.id);
       setJobStartedAt(Date.now());
       setJobTimedOut(false);
-      toast.success('Image generation started');
+      toast.success(imageMode === 'edit' ? 'Image edit started' : 'Image generation started');
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['jobs'] }),
         queryClient.invalidateQueries({ queryKey: ['assets'] }),
@@ -184,17 +291,75 @@ function GeneratePageContent() {
     jobQuery.data?.status === 'queued' ||
     jobQuery.data?.status === 'running';
   const maxImages = getMaxImagesForMode(generationMode);
+  const canGenerate = Boolean(prompt.trim()) && (imageMode === 'text' || Boolean(activeSourceAssetId));
+
+  const handleSelectFeedAsset = (assetId: string) => {
+    setImageMode('edit');
+    setSourceMode('feed');
+    setGenerationMode('enhanced');
+    setSelectedFeedAssetId(assetId);
+    setActiveJobId(null);
+    setJobTimedOut(false);
+  };
+
+  const handleUploadFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      toast.error('Please upload a JPEG, PNG, or WebP image');
+      return;
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error('File size must be under 50MB');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      setUploadedPreview(loadEvent.target?.result as string);
+      setUploadedAsset(null);
+      setImageMode('edit');
+      setSourceMode('upload');
+      setGenerationMode('enhanced');
+      setActiveJobId(null);
+      setJobTimedOut(false);
+      uploadSourceMutation.mutate(file);
+    };
+    reader.onerror = () => {
+      toast.error('Failed to read file');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearUploadedSource = () => {
+    setUploadedAsset(null);
+    setUploadedPreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="page-header">
         <h1 className="page-title">Generate Images</h1>
         <p className="page-description">
-          Create AI-generated images with either fal.ai base mode or Gemini enhanced mode.
+          Create from text, or edit one of your generated images and uploaded references.
         </p>
       </div>
 
-      <div className="grid lg:grid-cols-[1fr,400px] gap-6">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={handleUploadFile}
+        className="hidden"
+      />
+
+      <div className="grid lg:grid-cols-[1fr,420px] gap-6">
         <div className="space-y-4">
           {isGenerating ? (
             <div className="glass-card aspect-square flex flex-col items-center justify-center gap-4">
@@ -202,7 +367,9 @@ function GeneratePageContent() {
                 <div className="w-16 h-16 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
                 <Sparkles className="w-6 h-6 text-purple-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
               </div>
-              <p className="text-white/40 text-sm">Generating your images...</p>
+              <p className="text-white/40 text-sm">
+                {imageMode === 'edit' ? 'Editing your image...' : 'Generating your images...'}
+              </p>
             </div>
           ) : jobTimedOut ? (
             <div className="glass-card aspect-[4/3] flex flex-col items-center justify-center gap-4 px-8 text-center">
@@ -238,8 +405,15 @@ function GeneratePageContent() {
                   className="glass-card overflow-hidden group relative aspect-square"
                 >
                   <img src={image.url} alt="Generated" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2 flex-wrap">
+                      <Link
+                        href={`/dashboard/generate?sourceAssetId=${image.id}`}
+                        className="btn-ghost px-3 py-2 bg-black/40 backdrop-blur-sm rounded-lg text-xs font-medium"
+                      >
+                        <Pencil className="w-4 h-4 mr-1.5" />
+                        Edit
+                      </Link>
                       <Link
                         href={`/dashboard/video?sourceAssetId=${image.id}`}
                         className="btn-ghost px-3 py-2 bg-black/40 backdrop-blur-sm rounded-lg text-xs font-medium"
@@ -260,25 +434,267 @@ function GeneratePageContent() {
                 </div>
               ))}
             </div>
+          ) : imageMode === 'edit' && activeSourcePreview ? (
+            <div className="glass-card overflow-hidden">
+              <div className="aspect-[4/3] bg-black/40 flex items-center justify-center p-4">
+                <img
+                  src={activeSourcePreview}
+                  alt="Selected source"
+                  className="max-w-full max-h-full object-contain rounded-xl"
+                />
+              </div>
+              <div className="px-4 py-3 border-t border-white/10 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white">Editing source image</p>
+                  <p className="text-xs text-white/45 truncate">
+                    {activeSourceMeta
+                      ? `${activeSourceMeta.kind} • ${formatDate(activeSourceMeta.createdAt)}`
+                      : 'Ready for prompt-guided edits'}
+                  </p>
+                </div>
+                {uploadSourceMutation.isPending && sourceMode === 'upload' ? (
+                  <div className="flex items-center gap-2 text-xs text-white/50">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Uploading...
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-green-300">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Ready
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="glass-card aspect-[4/3] flex flex-col items-center justify-center gap-4">
               <ImageIcon className="w-16 h-16 text-white/10" />
-              <p className="text-white/30 text-sm">Your generated images will appear here</p>
+              <p className="text-white/30 text-sm">
+                {imageMode === 'edit'
+                  ? 'Choose an image to edit'
+                  : 'Your generated images will appear here'}
+              </p>
             </div>
           )}
         </div>
 
         <div className="space-y-4">
-          <div className="glass-card p-4 space-y-4">
+          <div className="glass-card p-4 space-y-5">
             <div>
-              <label className="block text-sm font-medium text-white/60 mb-2">Prompt</label>
+              <label className="block text-sm font-medium text-white/60 mb-2">
+                Generation Type
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setImageMode('text')}
+                  className={cn(
+                    'rounded-xl border px-4 py-3 text-sm font-medium transition-all',
+                    imageMode === 'text'
+                      ? 'bg-purple-600/30 border-purple-500/50 text-white'
+                      : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+                  )}
+                >
+                  Text to Image
+                </button>
+                <button
+                  onClick={() => {
+                    setImageMode('edit');
+                    setGenerationMode('enhanced');
+                  }}
+                  className={cn(
+                    'rounded-xl border px-4 py-3 text-sm font-medium transition-all',
+                    imageMode === 'edit'
+                      ? 'bg-purple-600/30 border-purple-500/50 text-white'
+                      : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+                  )}
+                >
+                  Edit Image
+                </button>
+              </div>
+            </div>
+
+            {imageMode === 'edit' && (
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-white/60">Source Image</label>
+                    <span className="text-xs text-white/35">Required</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setSourceMode('feed')}
+                      className={cn(
+                        'rounded-xl border px-4 py-3 text-sm font-medium transition-all',
+                        sourceMode === 'feed'
+                          ? 'bg-purple-600/30 border-purple-500/50 text-white'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+                      )}
+                    >
+                      From Feed
+                    </button>
+                    <button
+                      onClick={() => setSourceMode('upload')}
+                      className={cn(
+                        'rounded-xl border px-4 py-3 text-sm font-medium transition-all',
+                        sourceMode === 'upload'
+                          ? 'bg-purple-600/30 border-purple-500/50 text-white'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+                      )}
+                    >
+                      Upload
+                    </button>
+                  </div>
+                </div>
+
+                {sourceMode === 'feed' ? (
+                  assetsQuery.isPending ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-8 text-center text-sm text-white/45">
+                      Loading your images...
+                    </div>
+                  ) : sourceAssets.length > 0 ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
+                        {sourceAssets.map((asset) => {
+                          const isSelected = asset.id === selectedFeedAssetId;
+
+                          return (
+                            <button
+                              key={asset.id}
+                              onClick={() => handleSelectFeedAsset(asset.id)}
+                              className={cn(
+                                'group relative aspect-square overflow-hidden rounded-xl border transition-all',
+                                isSelected
+                                  ? 'border-purple-400 shadow-[0_0_0_1px_rgba(168,85,247,0.45)]'
+                                  : 'border-white/10 hover:border-white/25',
+                              )}
+                            >
+                              <img
+                                src={asset.url}
+                                alt="Source option"
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                              />
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-2 text-left">
+                                <p className="text-[11px] text-white/75 truncate">{asset.kind}</p>
+                                <p className="text-[10px] text-white/45">
+                                  {formatDate(asset.createdAt)}
+                                </p>
+                              </div>
+                              {isSelected && (
+                                <div className="absolute top-2 right-2 rounded-full bg-black/70 p-1">
+                                  <CheckCircle2 className="w-4 h-4 text-green-300" />
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-white/40">
+                        Pick a generated or uploaded image, then describe the changes you want.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-5 text-sm text-white/55 space-y-3">
+                      <p>No feed images yet. Generate one first or upload your own.</p>
+                      <button
+                        onClick={() => setImageMode('text')}
+                        className="btn-secondary inline-flex text-sm"
+                      >
+                        Generate Images
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="space-y-3">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-4 text-left transition-colors hover:bg-white/[0.05]"
+                    >
+                      {uploadedPreview ? (
+                        <div className="space-y-3">
+                          <div className="aspect-[4/3] overflow-hidden rounded-xl bg-black/40 flex items-center justify-center">
+                            <img
+                              src={uploadedPreview}
+                              alt="Uploaded source"
+                              className="max-w-full max-h-full object-contain"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-white">Uploaded source image</p>
+                              <p className="text-xs text-white/40">
+                                {uploadSourceMutation.isPending
+                                  ? 'Uploading image...'
+                                  : 'Click to replace this image'}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {uploadedPreview && !uploadSourceMutation.isPending && (
+                                <button
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    clearUploadedSource();
+                                  }}
+                                  className="rounded-lg border border-white/10 bg-black/30 p-2 text-white/60 hover:text-white"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              )}
+                              <div className="rounded-lg border border-white/10 bg-black/30 p-2 text-white/75">
+                                {uploadSourceMutation.isPending ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Upload className="w-4 h-4" />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-xl bg-white/5 p-3">
+                            <Upload className="w-5 h-5 text-white/60" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-white">
+                              Upload a source image
+                            </p>
+                            <p className="text-xs text-white/40">
+                              JPEG, PNG, or WebP up to 50MB
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </button>
+                    <p className="text-xs text-white/40">
+                      Uploaded images are saved to your feed so you can reuse them later.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-white/60">
+                  {imageMode === 'edit' ? 'Edit Prompt' : 'Prompt'}
+                </label>
+                <span className="text-xs text-white/35">Required</span>
+              </div>
               <textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Describe your image... e.g., editorial portrait in a luxury hotel lobby, dramatic lighting"
+                placeholder={
+                  imageMode === 'edit'
+                    ? 'Describe the changes you want... e.g., change the pose, add dramatic lighting, keep the same subject'
+                    : 'Describe your image... e.g., editorial portrait in a luxury hotel lobby, dramatic lighting'
+                }
                 rows={4}
                 className="input-field resize-none"
               />
+              <p className="mt-2 text-xs text-white/40">
+                {imageMode === 'edit'
+                  ? 'Editing uses the selected source image as the visual reference and your prompt as the change request.'
+                  : 'Use prompt text alone to generate a fresh image set.'}
+              </p>
             </div>
 
             <div>
@@ -286,22 +702,39 @@ function GeneratePageContent() {
                 Generation Mode
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {generationModes.map((mode) => (
-                  <button
-                    key={mode.value}
-                    onClick={() => setGenerationMode(mode.value)}
-                    className={cn(
-                      'rounded-lg border px-3 py-3 text-left transition-all',
-                      generationMode === mode.value
-                        ? 'bg-purple-600/30 border-purple-500/50 text-white'
-                        : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
-                    )}
-                  >
-                    <div className="text-sm font-medium">{mode.label}</div>
-                    <div className="mt-1 text-xs text-white/50">{mode.description}</div>
-                  </button>
-                ))}
+                {generationModes.map((mode) => {
+                  const disabled = imageMode === 'edit' && mode.value === 'base';
+
+                  return (
+                    <button
+                      key={mode.value}
+                      onClick={() => {
+                        if (!disabled) {
+                          setGenerationMode(mode.value);
+                        }
+                      }}
+                      disabled={disabled}
+                      className={cn(
+                        'rounded-lg border px-3 py-3 text-left transition-all',
+                        generationMode === mode.value
+                          ? 'bg-purple-600/30 border-purple-500/50 text-white'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+                        disabled && 'opacity-40 cursor-not-allowed hover:bg-white/5',
+                      )}
+                    >
+                      <div className="text-sm font-medium">{mode.label}</div>
+                      <div className="mt-1 text-xs text-white/50">{mode.description}</div>
+                    </button>
+                  );
+                })}
               </div>
+              <p className="mt-2 text-xs text-white/40">
+                {imageMode === 'edit'
+                  ? 'Edit mode uses enhanced generation so the source image is actually followed.'
+                  : generationMode === 'enhanced'
+                    ? 'Enhanced mode is capped at 4 images per job because Gemini returns up to 4 outputs.'
+                    : 'Base mode supports up to 8 images per job through fal.ai.'}
+              </p>
             </div>
 
             <div>
@@ -319,7 +752,8 @@ function GeneratePageContent() {
                 ))}
               </select>
               <p className="mt-2 text-xs text-white/40">
-                Character-based generations prefer fal.ai when it is configured.
+                Character references stack with edit mode when you want to push closer to a saved
+                character identity.
               </p>
             </div>
 
@@ -379,11 +813,6 @@ function GeneratePageContent() {
                 onChange={(event) => setNumImages(Number(event.target.value))}
                 className="w-full accent-purple-500"
               />
-              <p className="mt-2 text-xs text-white/40">
-                {generationMode === 'enhanced'
-                  ? 'Enhanced mode is capped at 4 images per job because Gemini returns up to 4 outputs.'
-                  : 'Base mode supports up to 8 images per job through fal.ai.'}
-              </p>
             </div>
 
             <button
@@ -442,21 +871,35 @@ function GeneratePageContent() {
 
             <button
               onClick={() => generateMutation.mutate()}
-              disabled={!prompt.trim() || isGenerating}
+              disabled={!canGenerate || isGenerating || uploadSourceMutation.isPending}
               className="btn-primary w-full py-4 text-base animate-pulse-glow"
             >
               {isGenerating ? (
                 <>
                   <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  Generating...
+                  {imageMode === 'edit' ? 'Editing...' : 'Generating...'}
                 </>
               ) : (
                 <>
                   <Wand2 className="w-5 h-5 mr-2" />
-                  Generate ({numImages * 5} credits)
+                  {imageMode === 'edit'
+                    ? `Edit Image (${numImages * 5} credits)`
+                    : `Generate (${numImages * 5} credits)`}
                 </>
               )}
             </button>
+
+            {imageMode === 'edit' && sourceMode === 'feed' && !selectedFeedAssetId && (
+              <p className="text-xs text-center text-white/40">
+                Select an image from your feed before editing.
+              </p>
+            )}
+
+            {imageMode === 'edit' && sourceMode === 'upload' && !uploadedAsset && (
+              <p className="text-xs text-center text-white/40">
+                Upload an image before editing.
+              </p>
+            )}
 
             {activeJobId && (
               <button onClick={() => void jobQuery.refetch()} className="btn-secondary w-full">

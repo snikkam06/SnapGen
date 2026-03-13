@@ -34,6 +34,7 @@ export class GenerationService {
       mode?: ImageGenerationMode;
       prompt: string;
       negativePrompt?: string;
+      sourceAssetId?: string;
       settings?: Record<string, unknown>;
     },
   ) {
@@ -41,19 +42,35 @@ export class GenerationService {
     if (!user) throw new NotFoundException('User not found');
 
     const characterContext = await this.getCharacterGenerationContext(user.id, data.characterId);
+    const sourceImageAsset = data.sourceAssetId
+      ? await this.resolveUserImageAsset(user.id, data.sourceAssetId)
+      : null;
     const imageMode = this.normalizeImageMode(data.mode);
-    const provider = characterContext.preferredImageProvider ?? this.resolveImageProvider(imageMode);
+    const resolvedImageMode: ImageGenerationMode | undefined = sourceImageAsset
+      ? 'enhanced'
+      : imageMode;
+    const provider = sourceImageAsset
+      ? 'google'
+      : characterContext.preferredImageProvider ?? this.resolveImageProvider(imageMode);
     const numImages = this.normalizeImageCount(data.settings?.numImages as number, provider);
     const totalCost = CREDIT_COSTS.image * numImages;
-    this.ensureProviderConfigured(provider, 'image', imageMode);
+    this.ensureProviderConfigured(provider, 'image', resolvedImageMode);
+    const referenceImages = [
+      ...(sourceImageAsset ? [sourceImageAsset.url] : []),
+      ...characterContext.referenceImages,
+    ].slice(0, 4);
     const jobSettings = {
       ...(data.settings || {}),
       numImages,
       ...(characterContext.characterName ? { characterName: characterContext.characterName } : {}),
-      ...(characterContext.referenceImages.length > 0
-        ? { referenceImages: characterContext.referenceImages }
+      ...(referenceImages.length > 0 ? { referenceImages } : {}),
+      ...(resolvedImageMode ? { generationMode: resolvedImageMode } : {}),
+      ...(sourceImageAsset
+        ? {
+            sourceAssetId: sourceImageAsset.id,
+            sourceImageUrl: sourceImageAsset.url,
+          }
         : {}),
-      ...(imageMode ? { generationMode: imageMode } : {}),
     };
 
     // Check balance
@@ -88,6 +105,16 @@ export class GenerationService {
       },
     });
 
+    if (sourceImageAsset) {
+      await this.prisma.jobAsset.create({
+        data: {
+          jobId: job.id,
+          assetId: sourceImageAsset.id,
+          relation: 'input',
+        },
+      });
+    }
+
     await this.dispatchImageJob(job.id);
 
     return {
@@ -119,28 +146,11 @@ export class GenerationService {
     }
 
     // Resolve source asset URL if provided
-    let sourceAssetId: string | undefined;
-    let sourceImageUrl: string | undefined;
-    if (data.sourceAssetId) {
-      const asset = await this.prisma.asset.findFirst({
-        where: {
-          id: data.sourceAssetId,
-          userId: user.id,
-          moderationStatus: { not: 'deleted' },
-        },
-      });
-
-      if (!asset) {
-        throw new NotFoundException('Source image not found');
-      }
-
-      if (!asset.mimeType.startsWith('image/')) {
-        throw new BadRequestException('Source asset must be an image');
-      }
-
-      sourceAssetId = asset.id;
-      sourceImageUrl = await this.storageService.getAssetUrl(asset);
-    }
+    const sourceImageAsset = data.sourceAssetId
+      ? await this.resolveUserImageAsset(user.id, data.sourceAssetId)
+      : null;
+    const sourceAssetId = sourceImageAsset?.id;
+    const sourceImageUrl = sourceImageAsset?.url;
 
     await this.prisma.creditLedger.create({
       data: {
@@ -870,5 +880,31 @@ export class GenerationService {
     }
 
     return this.getDefaultImageProvider();
+  }
+
+  private async resolveUserImageAsset(
+    userId: string,
+    assetId: string,
+  ): Promise<{ id: string; url: string }> {
+    const asset = await this.prisma.asset.findFirst({
+      where: {
+        id: assetId,
+        userId,
+        moderationStatus: { not: 'deleted' },
+      },
+    });
+
+    if (!asset) {
+      throw new NotFoundException('Source image not found');
+    }
+
+    if (!asset.mimeType.startsWith('image/')) {
+      throw new BadRequestException('Source asset must be an image');
+    }
+
+    return {
+      id: asset.id,
+      url: await this.storageService.getAssetUrl(asset),
+    };
   }
 }
