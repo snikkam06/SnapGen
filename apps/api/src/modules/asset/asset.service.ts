@@ -109,10 +109,22 @@ export class AssetService {
     if (!asset) throw new NotFoundException('Asset not found');
     if (asset.userId !== user.id) throw new ForbiddenException();
 
-    // Return a small JSON payload to avoid serializing Prisma BigInt fields.
-    await this.prisma.asset.update({
-      where: { id },
-      data: { moderationStatus: 'deleted' },
+    await this.storageService.deleteObject(asset.storageBucket, asset.storageKey);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.character.updateMany({
+        where: {
+          userId: user.id,
+          coverAssetId: id,
+        },
+        data: {
+          coverAssetId: null,
+        },
+      });
+
+      await tx.asset.delete({
+        where: { id },
+      });
     });
 
     return { id, deleted: true };
