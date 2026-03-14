@@ -358,8 +358,9 @@ function formatFalLogs(status: FalQueueStatusResponse): string | undefined {
 export class FalImageAdapter implements ImageGenerationAdapter {
   readonly providerName = 'fal';
   private apiKey: string;
-  private submitEndpointPath = 'fal-ai/flux/dev';
-  private queueEndpointPath = 'fal-ai/flux';
+  private textSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/text-to-image';
+  private editSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
+  private static multiJobRequests = new Map<string, string[]>();
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -369,28 +370,27 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     externalJobId: string;
     status: 'queued' | 'running' | 'completed';
   }> {
-    const data = await submitFalQueueRequest(this.apiKey, this.submitEndpointPath, {
-      prompt: this.buildPrompt(input.prompt),
-      negative_prompt: this.buildNegativePrompt(input.negativePrompt),
-      image_size: this.mapAspectRatio(input.aspectRatio),
-      num_images: input.numImages ?? 1,
-      seed: input.seed,
-      guidance_scale: input.guidance ?? 7.0,
-      num_inference_steps: input.steps ?? 28,
-      safety_tolerance: 6,
-      loras: input.loraModelUrl ? [{ path: input.loraModelUrl, scale: 0.8 }] : undefined,
-      enable_safety_checker: false,
-      output_format: 'jpeg',
-    });
-    const status = mapFalStatus(data.status);
+    const endpointPath = this.resolveEndpointPath(input);
+    const requestCount = Math.max(1, input.numImages ?? 1);
+    const requests = await Promise.all(
+      Array.from({ length: requestCount }, (_, index) =>
+        this.submitJob(endpointPath, input, index),
+      ),
+    );
 
-    if (status === 'failed') {
-      throw new Error('Fal image job failed to start');
+    if (requests.length === 1) {
+      return requests[0];
     }
 
+    const aggregateJobId = `multi:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    FalImageAdapter.multiJobRequests.set(
+      aggregateJobId,
+      requests.map((request) => request.externalJobId),
+    );
+
     return {
-      externalJobId: data.response_url ?? data.request_id ?? `fal-${Date.now()}`,
-      status,
+      externalJobId: aggregateJobId,
+      status: requests.some((request) => request.status === 'running') ? 'running' : 'queued',
     };
   }
 
@@ -399,8 +399,70 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string }>;
     errorMessage?: string;
   }> {
+    const multiJobRequests = FalImageAdapter.multiJobRequests.get(externalJobId);
+    if (multiJobRequests) {
+      const results = await Promise.all(
+        multiJobRequests.map((requestId) => this.getSingleJobResult(requestId)),
+      );
+
+      const failedResult = results.find((result) => result.status === 'failed');
+      if (failedResult) {
+        return failedResult;
+      }
+
+      if (results.some((result) => result.status === 'running')) {
+        return { status: 'running' };
+      }
+
+      if (results.some((result) => result.status === 'queued')) {
+        return { status: 'queued' };
+      }
+
+      return {
+        status: 'completed',
+        outputs: results.flatMap((result) => result.outputs || []),
+      };
+    }
+
+    return this.getSingleJobResult(externalJobId);
+  }
+
+  private async submitJob(
+    endpointPath: string,
+    input: ImageGenerationInput,
+    index: number,
+  ): Promise<{
+    externalJobId: string;
+    status: 'queued' | 'running' | 'completed';
+  }> {
+    const data = await submitFalQueueRequest(
+      this.apiKey,
+      endpointPath,
+      this.buildRequestPayload(endpointPath, input, index),
+    );
+    const status = mapFalStatus(data.status);
+
+    if (status === 'failed') {
+      throw new Error('Fal image job failed to start');
+    }
+
+    return {
+      externalJobId: this.encodeExternalJobId(
+        endpointPath,
+        data.response_url ?? data.request_id ?? `fal-${Date.now()}-${index}`,
+      ),
+      status,
+    };
+  }
+
+  private async getSingleJobResult(externalJobId: string): Promise<{
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    outputs?: Array<{ url: string; mimeType: string }>;
+    errorMessage?: string;
+  }> {
     try {
-      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
+      const { endpointPath, jobId } = this.decodeExternalJobId(externalJobId);
+      const status = await getFalQueueStatus(this.apiKey, endpointPath, jobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -416,8 +478,8 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       );
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
-        this.queueEndpointPath,
-        externalJobId,
+        endpointPath,
+        jobId,
         status.response_url,
       );
       const responseBody =
@@ -449,6 +511,63 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     }
   }
 
+  private resolveEndpointPath(input: ImageGenerationInput): string {
+    return input.referenceImages?.length ? this.editSubmitEndpointPath : this.textSubmitEndpointPath;
+  }
+
+  private buildRequestPayload(
+    endpointPath: string,
+    input: ImageGenerationInput,
+    requestIndex: number,
+  ): Record<string, unknown> {
+    const seed =
+      typeof input.seed === 'number' ? input.seed + requestIndex : undefined;
+    const payload: Record<string, unknown> = {
+      prompt: this.buildPrompt(input.prompt, input.negativePrompt, Boolean(input.referenceImages?.length)),
+      image_size: this.mapAspectRatio(input.aspectRatio),
+      seed,
+      safety_tolerance: 5,
+      enable_safety_checker: false,
+      output_format: 'jpeg',
+    };
+
+    if (endpointPath === this.editSubmitEndpointPath) {
+      payload.image_urls = input.referenceImages?.slice(0, 9) || [];
+    }
+
+    return payload;
+  }
+
+  private encodeExternalJobId(endpointPath: string, jobId: string): string {
+    if (jobId.startsWith('http://') || jobId.startsWith('https://')) {
+      return jobId;
+    }
+
+    return `${endpointPath}::${jobId}`;
+  }
+
+  private decodeExternalJobId(externalJobId: string): { endpointPath: string; jobId: string } {
+    if (externalJobId.startsWith('http://') || externalJobId.startsWith('https://')) {
+      return {
+        endpointPath: this.textSubmitEndpointPath,
+        jobId: externalJobId,
+      };
+    }
+
+    const separatorIndex = externalJobId.indexOf('::');
+    if (separatorIndex === -1) {
+      return {
+        endpointPath: this.textSubmitEndpointPath,
+        jobId: externalJobId,
+      };
+    }
+
+    return {
+      endpointPath: externalJobId.slice(0, separatorIndex),
+      jobId: externalJobId.slice(separatorIndex + 2),
+    };
+  }
+
   private mapAspectRatio(ratio?: string): string {
     const map: Record<string, string> = {
       '1:1': 'square_hd',
@@ -459,22 +578,30 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     return map[ratio || '1:1'] || 'square_hd';
   }
 
-  private buildPrompt(prompt: string): string {
-    if (prompt.includes(FAL_PHOTOREALISTIC_PROMPT_SUFFIX)) {
-      return prompt;
+  private buildPrompt(prompt: string, negativePrompt?: string, hasReferenceImages = false): string {
+    const promptParts = [];
+
+    if (prompt.trim()) {
+      promptParts.push(prompt.trim());
     }
 
-    return prompt.trim()
-      ? `${prompt.trim()}\n\n${FAL_PHOTOREALISTIC_PROMPT_SUFFIX}`
-      : FAL_PHOTOREALISTIC_PROMPT_SUFFIX;
-  }
-
-  private buildNegativePrompt(negativePrompt?: string): string {
-    if (!negativePrompt?.trim()) {
-      return FAL_DEFAULT_NEGATIVE_PROMPT;
+    if (hasReferenceImages) {
+      promptParts.push(
+        'Use the provided reference images to preserve identity, composition, lighting cues, and important visual details while following the edit request.',
+      );
     }
 
-    return `${negativePrompt.trim()}, ${FAL_DEFAULT_NEGATIVE_PROMPT}`;
+    if (!prompt.includes(FAL_PHOTOREALISTIC_PROMPT_SUFFIX)) {
+      promptParts.push(FAL_PHOTOREALISTIC_PROMPT_SUFFIX);
+    }
+
+    promptParts.push(
+      negativePrompt?.trim()
+        ? `Avoid: ${negativePrompt.trim()}, ${FAL_DEFAULT_NEGATIVE_PROMPT}`
+        : `Avoid: ${FAL_DEFAULT_NEGATIVE_PROMPT}`,
+    );
+
+    return promptParts.join('\n\n');
   }
 }
 

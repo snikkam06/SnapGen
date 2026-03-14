@@ -37,7 +37,7 @@ const generationModes = [
   {
     value: 'base',
     label: 'Base',
-    description: 'Faster text-first generation with fal.ai.',
+    description: 'Uses fal.ai Seedream 4.5 for text and image-to-image generation.',
     maxImages: 8,
   },
   {
@@ -119,9 +119,7 @@ function GeneratePageContent() {
   const [negativePrompt, setNegativePrompt] = useState('');
   const [selectedStyle, setSelectedStyle] = useState(stylePacks[0].id);
   const [selectedCharacterId, setSelectedCharacterId] = useState(initialCharacterId || '');
-  const [generationMode, setGenerationMode] = useState<'base' | 'enhanced'>(
-    initialSourceAssetId ? 'enhanced' : 'base',
-  );
+  const [generationMode, setGenerationMode] = useState<'base' | 'enhanced'>('base');
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [numImages, setNumImages] = useState(4);
   const [guidance, setGuidance] = useState(7.0);
@@ -155,15 +153,8 @@ function GeneratePageContent() {
 
     setImageMode('edit');
     setSourceMode('feed');
-    setGenerationMode('enhanced');
     setSelectedFeedAssetId(initialSourceAssetId);
   }, [initialSourceAssetId]);
-
-  useEffect(() => {
-    if (imageMode === 'edit' && generationMode !== 'enhanced') {
-      setGenerationMode('enhanced');
-    }
-  }, [generationMode, imageMode]);
 
   useEffect(() => {
     const nextMaxImages = getMaxImagesForMode(generationMode);
@@ -258,7 +249,7 @@ function GeneratePageContent() {
 
       return api.generateImage(token, {
         characterId: selectedCharacterId || undefined,
-        mode: imageMode === 'edit' ? 'enhanced' : generationMode,
+        mode: generationMode,
         prompt,
         negativePrompt: negativePrompt || undefined,
         sourceAssetId: imageMode === 'edit' ? activeSourceAssetId || undefined : undefined,
@@ -296,7 +287,6 @@ function GeneratePageContent() {
   const handleSelectFeedAsset = (assetId: string) => {
     setImageMode('edit');
     setSourceMode('feed');
-    setGenerationMode('enhanced');
     setSelectedFeedAssetId(assetId);
     setActiveJobId(null);
     setJobTimedOut(false);
@@ -323,7 +313,6 @@ function GeneratePageContent() {
       setUploadedAsset(null);
       setImageMode('edit');
       setSourceMode('upload');
-      setGenerationMode('enhanced');
       setActiveJobId(null);
       setJobTimedOut(false);
       uploadSourceMutation.mutate(file);
@@ -496,10 +485,7 @@ function GeneratePageContent() {
                   Text to Image
                 </button>
                 <button
-                  onClick={() => {
-                    setImageMode('edit');
-                    setGenerationMode('enhanced');
-                  }}
+                  onClick={() => setImageMode('edit')}
                   className={cn(
                     'rounded-xl border px-4 py-3 text-sm font-medium transition-all',
                     imageMode === 'edit'
@@ -703,23 +689,15 @@ function GeneratePageContent() {
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {generationModes.map((mode) => {
-                  const disabled = imageMode === 'edit' && mode.value === 'base';
-
                   return (
                     <button
                       key={mode.value}
-                      onClick={() => {
-                        if (!disabled) {
-                          setGenerationMode(mode.value);
-                        }
-                      }}
-                      disabled={disabled}
+                      onClick={() => setGenerationMode(mode.value)}
                       className={cn(
                         'rounded-lg border px-3 py-3 text-left transition-all',
                         generationMode === mode.value
                           ? 'bg-purple-600/30 border-purple-500/50 text-white'
                           : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
-                        disabled && 'opacity-40 cursor-not-allowed hover:bg-white/5',
                       )}
                     >
                       <div className="text-sm font-medium">{mode.label}</div>
@@ -730,10 +708,12 @@ function GeneratePageContent() {
               </div>
               <p className="mt-2 text-xs text-white/40">
                 {imageMode === 'edit'
-                  ? 'Edit mode uses enhanced generation so the source image is actually followed.'
+                  ? generationMode === 'base'
+                    ? 'Base edit mode uses fal.ai Seedream 4.5 image-to-image with your selected source image.'
+                    : 'Enhanced edit mode uses Gemini reference-guided generation.'
                   : generationMode === 'enhanced'
                     ? 'Enhanced mode is capped at 4 images per job because Gemini returns up to 4 outputs.'
-                    : 'Base mode supports up to 8 images per job through fal.ai.'}
+                    : 'Base mode supports up to 8 images per job through fal.ai Seedream 4.5.'}
               </p>
             </div>
 

@@ -46,25 +46,25 @@ export class GenerationService {
       ? await this.resolveUserImageAsset(user.id, data.sourceAssetId)
       : null;
     const imageMode = this.normalizeImageMode(data.mode);
-    const resolvedImageMode: ImageGenerationMode | undefined = sourceImageAsset
-      ? 'enhanced'
-      : imageMode;
-    const provider = sourceImageAsset
-      ? 'google'
-      : characterContext.preferredImageProvider ?? this.resolveImageProvider(imageMode);
-    const numImages = this.normalizeImageCount(data.settings?.numImages as number, provider);
-    const totalCost = CREDIT_COSTS.image * numImages;
-    this.ensureProviderConfigured(provider, 'image', resolvedImageMode);
     const referenceImages = [
       ...(sourceImageAsset ? [sourceImageAsset.url] : []),
       ...characterContext.referenceImages,
     ].slice(0, 4);
+    const provider =
+      referenceImages.length > 0
+        ? imageMode
+          ? this.resolveImageProvider(imageMode)
+          : this.getReferenceImageProvider()
+        : this.resolveImageProvider(imageMode);
+    const numImages = this.normalizeImageCount(data.settings?.numImages as number, provider);
+    const totalCost = CREDIT_COSTS.image * numImages;
+    this.ensureProviderConfigured(provider, 'image', imageMode);
     const jobSettings = {
       ...(data.settings || {}),
       numImages,
       ...(characterContext.characterName ? { characterName: characterContext.characterName } : {}),
       ...(referenceImages.length > 0 ? { referenceImages } : {}),
-      ...(resolvedImageMode ? { generationMode: resolvedImageMode } : {}),
+      ...(imageMode ? { generationMode: imageMode } : {}),
       ...(sourceImageAsset
         ? {
             sourceAssetId: sourceImageAsset.id,
@@ -877,6 +877,18 @@ export class GenerationService {
   private getCharacterImageProvider(): string {
     if (process.env.IMAGE_PROVIDER === 'fal' || process.env.FAL_API_KEY) {
       return 'fal';
+    }
+
+    return this.getDefaultImageProvider();
+  }
+
+  private getReferenceImageProvider(): string {
+    if (process.env.IMAGE_PROVIDER === 'fal' || process.env.FAL_API_KEY) {
+      return 'fal';
+    }
+
+    if (process.env.IMAGE_PROVIDER === 'google' || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+      return 'google';
     }
 
     return this.getDefaultImageProvider();
