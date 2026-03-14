@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderOpen, Grid, List, Download, Trash2, X } from 'lucide-react';
+import { FolderOpen, Grid, List, Download, Loader2, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApiToken } from '@/hooks/use-api-token';
 import { api } from '@/lib/api-client';
@@ -23,6 +23,10 @@ interface GalleryItem {
 
 interface AssetsResponse {
   data: GalleryItem[];
+  total?: number;
+  page?: number;
+  limit?: number;
+  totalPages?: number;
 }
 
 export default function GalleryPage() {
@@ -47,9 +51,23 @@ export default function GalleryPage() {
 
       return api.deleteAsset(token, assetId);
     },
-    onSuccess: async () => {
+    onSuccess: async (_response, assetId) => {
+      queryClient.setQueryData<AssetsResponse | undefined>(['assets', token], (current) => {
+        if (!current) {
+          return current;
+        }
+
+        const remainingItems = current.data.filter((asset) => asset.id !== assetId);
+
+        return {
+          ...current,
+          data: remainingItems,
+          total: typeof current.total === 'number' ? Math.max(0, current.total - 1) : current.total,
+        };
+      });
+      setSelectedItem((current) => (current?.id === assetId ? null : current));
       toast.success('Asset removed');
-      await queryClient.invalidateQueries({ queryKey: ['assets'] });
+      await queryClient.invalidateQueries({ queryKey: ['assets', token] });
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'Failed to delete asset');
@@ -69,6 +87,18 @@ export default function GalleryPage() {
 
   const isVideoItem = (item: GalleryItem) =>
     item.mimeType.startsWith('video/') || item.kind.includes('video');
+
+  const handleDeleteAsset = async (assetId: string) => {
+    if (deleteAssetMutation.isPending) {
+      return;
+    }
+
+    if (!window.confirm('Delete this asset? This cannot be undone.')) {
+      return;
+    }
+
+    await deleteAssetMutation.mutateAsync(assetId);
+  };
 
   return (
     <div className="space-y-6">
@@ -110,7 +140,10 @@ export default function GalleryPage() {
       </div>
 
       {assetsQuery.isPending ? (
-        <div className="glass-card p-12 text-center text-white/40">Loading assets...</div>
+        <div className="glass-card p-12 flex flex-col items-center justify-center gap-3 text-white/40">
+          <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+          <span>Loading assets...</span>
+        </div>
       ) : items.length === 0 ? (
         <div className="glass-card p-12 text-center">
           <FolderOpen className="w-16 h-16 text-white/10 mx-auto mb-4" />
@@ -132,7 +165,7 @@ export default function GalleryPage() {
               key={item.id}
               onClick={() => setSelectedItem(item)}
               className={cn(
-                'glass-card overflow-hidden group cursor-pointer',
+                'glass-card overflow-hidden group cursor-pointer relative',
                 viewMode === 'grid' ? 'aspect-square' : 'flex items-center gap-4 p-3',
               )}
             >
@@ -158,21 +191,30 @@ export default function GalleryPage() {
                     <div className="absolute bottom-2 left-2 right-2 flex gap-1.5">
                       <a
                         href={item.url}
+                        download
                         target="_blank"
                         rel="noreferrer"
                         onClick={(event) => event.stopPropagation()}
                         className="p-1.5 rounded bg-black/40 backdrop-blur-sm hover:bg-black/60"
+                        aria-label="Download"
                       >
                         <Download className="w-3 h-3" />
                       </a>
                       <button
+                        type="button"
+                        disabled={deleteAssetMutation.isPending}
                         onClick={(event) => {
                           event.stopPropagation();
-                          deleteAssetMutation.mutate(item.id);
+                          void handleDeleteAsset(item.id);
                         }}
-                        className="p-1.5 rounded bg-black/40 backdrop-blur-sm hover:bg-black/60"
+                        className="p-1.5 rounded bg-black/40 backdrop-blur-sm hover:bg-black/60 disabled:cursor-not-allowed disabled:opacity-60"
+                        aria-label="Delete"
                       >
-                        <Trash2 className="w-3 h-3 text-red-400" />
+                        {deleteAssetMutation.isPending && deleteAssetMutation.variables === item.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-red-400" />
+                        ) : (
+                          <Trash2 className="w-3 h-3 text-red-400" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -199,6 +241,35 @@ export default function GalleryPage() {
                     </p>
                   </div>
                   <p className="text-xs text-white/30">{formatDate(item.createdAt)}</p>
+                  <div className="flex items-center gap-1.5">
+                    <a
+                      href={item.url}
+                      download
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      className="p-2 rounded bg-black/30 backdrop-blur-sm hover:bg-black/50"
+                      aria-label="Download"
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
+                    <button
+                      type="button"
+                      disabled={deleteAssetMutation.isPending}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleDeleteAsset(item.id);
+                      }}
+                      className="p-2 rounded bg-black/30 backdrop-blur-sm hover:bg-black/50 disabled:cursor-not-allowed disabled:opacity-60"
+                      aria-label="Delete"
+                    >
+                      {deleteAssetMutation.isPending && deleteAssetMutation.variables === item.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-red-400" />
+                      ) : (
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      )}
+                    </button>
+                  </div>
                 </>
               )}
             </div>
@@ -207,32 +278,62 @@ export default function GalleryPage() {
       )}
 
       {selectedItem && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-8"
-          onClick={() => setSelectedItem(null)}
-        >
-          <button className="absolute top-4 right-4 p-2 text-white/60 hover:text-white">
-            <X className="w-6 h-6" />
-          </button>
-          {isVideoItem(selectedItem) ? (
-            <video
-              src={selectedItem.url}
-              controls
-              autoPlay
-              loop
-              playsInline
-              className="max-w-full max-h-full object-contain rounded-lg"
-              onClick={(event) => event.stopPropagation()}
-            />
-          ) : (
-            <img
-              src={selectedItem.url}
-              alt="Full size"
-              className="max-w-full max-h-full object-contain rounded-lg"
-              onClick={(event) => event.stopPropagation()}
-            />
-          )}
-        </div>
+        <GalleryModal
+          item={selectedItem}
+          isVideo={isVideoItem(selectedItem)}
+          onClose={() => setSelectedItem(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function GalleryModal({
+  item,
+  isVideo,
+  onClose,
+}: {
+  item: GalleryItem;
+  isVideo: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-8"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 p-2 text-white/60 hover:text-white"
+        aria-label="Close"
+      >
+        <X className="w-6 h-6" />
+      </button>
+      {isVideo ? (
+        <video
+          src={item.url}
+          controls
+          autoPlay
+          loop
+          playsInline
+          className="max-w-full max-h-full object-contain rounded-lg"
+          onClick={(event) => event.stopPropagation()}
+        />
+      ) : (
+        <img
+          src={item.url}
+          alt="Full size"
+          className="max-w-full max-h-full object-contain rounded-lg"
+          onClick={(event) => event.stopPropagation()}
+        />
       )}
     </div>
   );

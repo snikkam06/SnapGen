@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { GenerationService } from '../generation/generation.service';
+import { assertUuid } from '../../utils/validation';
 
 @Injectable()
 export class JobService {
@@ -26,16 +27,8 @@ export class JobService {
     });
 
     for (const job of jobs) {
-      if (job.status !== 'queued') {
-        continue;
-      }
-
-      if (job.jobType === 'image') {
-        void this.generationService.ensureImageJobProcessing(job.id);
-      }
-
-      if (job.jobType === 'video') {
-        void this.generationService.ensureVideoJobProcessing(job.id);
+      if (job.status === 'queued') {
+        void this.generationService.ensureJobProcessing(job.id);
       }
     }
 
@@ -47,6 +40,8 @@ export class JobService {
   }
 
   async findOne(clerkUserId: string, id: string) {
+    assertUuid(id, 'jobId');
+
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -62,12 +57,8 @@ export class JobService {
     if (!job) throw new NotFoundException('Job not found');
     if (job.userId !== user.id) throw new ForbiddenException();
 
-    if (job.jobType === 'image' && job.status === 'queued') {
-      void this.generationService.ensureImageJobProcessing(job.id);
-    }
-
-    if (job.jobType === 'video' && job.status === 'queued') {
-      void this.generationService.ensureVideoJobProcessing(job.id);
+    if (job.status === 'queued') {
+      void this.generationService.ensureJobProcessing(job.id);
     }
 
     return {

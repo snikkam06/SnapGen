@@ -24,15 +24,6 @@ import { useApiToken } from '@/hooks/use-api-token';
 import { api } from '@/lib/api-client';
 import { cn, formatDate } from '@/lib/utils';
 
-const stylePacks = [
-  { id: 'photorealistic-portrait', name: 'Photorealistic Portrait', cost: 5 },
-  { id: 'editorial-fashion', name: 'Editorial Fashion', cost: 8 },
-  { id: 'glamour', name: 'Glamour', cost: 10 },
-  { id: 'artistic-nude', name: 'Artistic Nude', cost: 12 },
-  { id: 'fantasy', name: 'Fantasy', cost: 8 },
-  { id: 'cinematic', name: 'Cinematic', cost: 8 },
-];
-
 const generationModes = [
   {
     value: 'base',
@@ -117,7 +108,6 @@ function GeneratePageContent() {
   const [sourceMode, setSourceMode] = useState<SourceMode>(initialSourceAssetId ? 'feed' : 'feed');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
-  const [selectedStyle, setSelectedStyle] = useState(stylePacks[0].id);
   const [selectedCharacterId, setSelectedCharacterId] = useState(initialCharacterId || '');
   const [generationMode, setGenerationMode] = useState<'base' | 'enhanced'>('base');
   const [aspectRatio, setAspectRatio] = useState('1:1');
@@ -738,27 +728,6 @@ function GeneratePageContent() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-white/60 mb-2">Style Pack</label>
-              <div className="grid grid-cols-2 gap-2">
-                {stylePacks.map((style) => (
-                  <button
-                    key={style.id}
-                    onClick={() => setSelectedStyle(style.id)}
-                    className={cn(
-                      'px-3 py-2 rounded-lg text-xs font-medium text-left transition-all',
-                      selectedStyle === style.id
-                        ? 'bg-purple-600/30 border border-purple-500/50 text-white'
-                        : 'bg-white/5 border border-white/10 text-white/60 hover:bg-white/10',
-                    )}
-                  >
-                    <div>{style.name}</div>
-                    <div className="text-purple-400 mt-0.5">{style.cost} credits</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
               <label className="block text-sm font-medium text-white/60 mb-2">Aspect Ratio</label>
               <div className="flex gap-2">
                 {aspectRatios.map((ratio) => (
@@ -840,8 +809,13 @@ function GeneratePageContent() {
                   </label>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={seed}
                     onChange={(event) => setSeed(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (['-', '.', 'e', 'E'].includes(event.key)) event.preventDefault();
+                    }}
                     placeholder="Random"
                     className="input-field text-sm"
                   />
@@ -852,7 +826,10 @@ function GeneratePageContent() {
             <button
               onClick={() => generateMutation.mutate()}
               disabled={!canGenerate || isGenerating || uploadSourceMutation.isPending}
-              className="btn-primary w-full py-4 text-base animate-pulse-glow"
+              className={cn(
+                'btn-primary w-full py-4 text-base',
+                canGenerate && !isGenerating && !uploadSourceMutation.isPending && 'animate-pulse-glow',
+              )}
             >
               {isGenerating ? (
                 <>

@@ -122,7 +122,13 @@ export default function DashboardPage() {
                                 <stat.icon className="w-5 h-5 text-white" />
                             </div>
                         </div>
-                        <div className="text-2xl font-bold">{isLoading ? '...' : stat.value}</div>
+                        <div className="text-2xl font-bold">
+                            {isLoading ? (
+                                <span className="inline-block w-16 h-7 bg-white/10 rounded animate-pulse" />
+                            ) : (
+                                stat.value
+                            )}
+                        </div>
                         <div className="text-sm text-white/40 mt-1">{stat.name}</div>
                     </div>
                 ))}

@@ -1,19 +1,46 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
-    constructor() {
-        super({
-            log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  private static readonly SERIALIZABLE_RETRY_LIMIT = 3;
+
+  constructor() {
+    super({
+      log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    });
+  }
+
+  async onModuleInit() {
+    await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+
+  async withSerializableTransaction<T>(
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+    maxRetries = PrismaService.SERIALIZABLE_RETRY_LIMIT,
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        return await this.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
+      } catch (error) {
+        if (
+          !(
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2034' &&
+            attempt < maxRetries
+          )
+        ) {
+          throw error;
+        }
+      }
     }
 
-    async onModuleInit() {
-        await this.$connect();
-    }
-
-    async onModuleDestroy() {
-        await this.$disconnect();
-    }
+    throw new Error('Unreachable transaction retry state');
+  }
 }

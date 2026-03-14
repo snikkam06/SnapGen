@@ -175,3 +175,10 @@
       0 0 60px rgba(168, 85, 247, 0.2);
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-glow,
+  .animate-slide-up {
+    animation: none !important;
+  }
+}

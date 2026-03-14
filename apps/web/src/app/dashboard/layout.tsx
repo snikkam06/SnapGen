@@ -18,6 +18,7 @@ import {
   Wand2,
   ArrowUpCircle,
   LogOut,
+  Menu,
   Video,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -69,6 +70,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const tokenQuery = useApiToken();
   const creditsQuery = useQuery({
@@ -79,11 +81,21 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background flex">
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <aside
         className={cn(
           'fixed inset-y-0 left-0 z-50 flex flex-col border-r border-white/5 bg-card/50 backdrop-blur-xl transition-all duration-300',
           collapsed ? 'w-[68px]' : 'w-64',
+          'max-lg:w-64',
+          mobileOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
         )}
       >
         {/* Logo */}
@@ -104,6 +116,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.name}
                 href={item.href}
+                onClick={() => setMobileOpen(false)}
                 className={cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
                   isActive
@@ -119,28 +132,31 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             );
           })}
 
-          <div className="pt-4 mt-4 border-t border-white/5">
-            {adminNavigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
-              return (
-                <Link
-                  key={item.name}
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
-                    isActive
-                      ? 'bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-white'
-                      : 'text-white/50 hover:text-white hover:bg-white/5',
-                    collapsed && 'justify-center px-2',
-                  )}
-                  title={collapsed ? item.name : undefined}
-                >
-                  <item.icon className="w-5 h-5 flex-shrink-0" />
-                  {!collapsed && <span>{item.name}</span>}
-                </Link>
-              );
-            })}
-          </div>
+          {process.env.NEXT_PUBLIC_SHOW_ADMIN === 'true' && (
+            <div className="pt-4 mt-4 border-t border-white/5">
+              {adminNavigation.map((item) => {
+                const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    onClick={() => setMobileOpen(false)}
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
+                      isActive
+                        ? 'bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-white'
+                        : 'text-white/50 hover:text-white hover:bg-white/5',
+                      collapsed && 'justify-center px-2',
+                    )}
+                    title={collapsed ? item.name : undefined}
+                  >
+                    <item.icon className="w-5 h-5 flex-shrink-0" />
+                    {!collapsed && <span>{item.name}</span>}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
         </nav>
 
         {/* Collapse toggle */}
@@ -153,16 +169,25 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main content */}
-      <main className={cn('flex-1 transition-all duration-300', collapsed ? 'ml-[68px]' : 'ml-64')}>
+      <main className={cn('flex-1 transition-all duration-300', collapsed ? 'lg:ml-[68px]' : 'lg:ml-64')}>
         {/* Top bar */}
-        <header className="h-16 border-b border-white/5 flex items-center justify-end px-6 bg-background/80 backdrop-blur-xl sticky top-0 z-40">
-          <div className="flex items-center gap-4">
+        <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-background/80 backdrop-blur-xl sticky top-0 z-40">
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="lg:hidden p-2 -ml-2 text-white/60 hover:text-white"
+            aria-label="Open menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <div className="flex items-center gap-4 ml-auto">
             <div className="glass-card px-4 py-1.5 flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-purple-400" />
               <span className="text-sm font-medium">
-                {creditsQuery.isPending
-                  ? '...'
-                  : `${formatCredits(creditsQuery.data?.balance || 0)} credits`}
+                {creditsQuery.isPending ? (
+                  <span className="inline-block w-14 h-4 bg-white/10 rounded animate-pulse" />
+                ) : (
+                  `${formatCredits(creditsQuery.data?.balance || 0)} credits`
+                )}
               </span>
             </div>
             <SignOutButton>
