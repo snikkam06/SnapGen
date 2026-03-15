@@ -1,3 +1,6 @@
+import { fal } from '@fal-ai/client';
+import sharp from 'sharp';
+
 // ─── AI Provider Adapter Interfaces ──────────────────
 // These abstractions allow swapping vendors without changing business logic.
 
@@ -211,6 +214,11 @@ const FAL_DEFAULT_NEGATIVE_PROMPT =
   'blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
+const FAL_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const FAL_TARGET_UPLOAD_BYTES = Math.floor(FAL_MAX_UPLOAD_BYTES * 0.9);
+const FAL_OPTIMIZED_IMAGE_CONTENT_TYPE = 'image/webp';
+const FAL_IMAGE_QUALITY_STEPS = [90, 84, 78, 72, 66];
+const FAL_IMAGE_MAX_DIMENSION_STEPS = [2048, 1792, 1536, 1280, 1024, 768];
 
 function ensureFalApiKey(apiKey: string, capability: string): void {
   if (!apiKey) {
@@ -227,6 +235,76 @@ function mapFalStatus(status?: string): 'queued' | 'running' | 'completed' | 'fa
   };
 
   return statusMap[status ?? ''] || 'queued';
+}
+
+function isImageMimeType(mimeType: string | null): boolean {
+  return Boolean(mimeType && mimeType.startsWith('image/'));
+}
+
+async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string): Promise<string> {
+  ensureFalApiKey(apiKey, 'fal.ai file upload');
+
+  const response = await fetch(sourceImageUrl);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to download source image for Fal: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!isImageMimeType(contentType)) {
+    throw new Error('Source asset is not a supported image for Fal processing');
+  }
+
+  const originalBuffer = Buffer.from(await response.arrayBuffer());
+  if (originalBuffer.byteLength <= FAL_MAX_UPLOAD_BYTES) {
+    return sourceImageUrl;
+  }
+
+  const optimizedImage = await optimizeImageForFalUpload(originalBuffer);
+  if (optimizedImage.byteLength > FAL_MAX_UPLOAD_BYTES) {
+    throw new Error(
+      'Source image is too large for Fal video generation even after optimization. Try a smaller image.',
+    );
+  }
+
+  fal.config({ credentials: apiKey });
+  return fal.storage.upload(new Blob([optimizedImage], { type: FAL_OPTIMIZED_IMAGE_CONTENT_TYPE }), {
+    lifecycle: { expiresIn: '1d' },
+  });
+}
+
+async function optimizeImageForFalUpload(buffer: Buffer): Promise<Buffer> {
+  let smallestBuffer: Buffer | null = null;
+
+  for (const maxDimension of FAL_IMAGE_MAX_DIMENSION_STEPS) {
+    for (const quality of FAL_IMAGE_QUALITY_STEPS) {
+      const candidate = await sharp(buffer, { failOn: 'none' })
+        .rotate()
+        .resize({
+          width: maxDimension,
+          height: maxDimension,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp({
+          quality,
+          alphaQuality: quality,
+          effort: 4,
+        })
+        .toBuffer();
+
+      if (!smallestBuffer || candidate.byteLength < smallestBuffer.byteLength) {
+        smallestBuffer = candidate;
+      }
+
+      if (candidate.byteLength <= FAL_TARGET_UPLOAD_BYTES) {
+        return candidate;
+      }
+    }
+  }
+
+  return smallestBuffer ?? buffer;
 }
 
 async function submitFalQueueRequest(
@@ -992,7 +1070,10 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     externalJobId: string;
     status: 'queued' | 'running' | 'completed';
   }> {
-    const endpointPath = input.sourceImageUrl
+    const sourceImageUrl = input.sourceImageUrl
+      ? await normalizeFalInputImageUrl(this.apiKey, input.sourceImageUrl)
+      : undefined;
+    const endpointPath = sourceImageUrl
       ? this.imageToVideoSubmitEndpointPath
       : this.textToVideoSubmitEndpointPath;
     const motionAmount =
@@ -1005,7 +1086,7 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
           ? input.settings.cameraControl
           : undefined,
       ),
-      ...(input.sourceImageUrl ? { start_image_url: input.sourceImageUrl } : {}),
+      ...(sourceImageUrl ? { start_image_url: sourceImageUrl } : {}),
       duration: `${input.durationSec ?? 5}`,
       aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
       generate_audio: false,

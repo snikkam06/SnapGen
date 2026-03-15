@@ -254,6 +254,13 @@ importers:
         version: 5.9.3
 
   packages/media-adapters:
+    dependencies:
+      '@fal-ai/client':
+        specifier: ^1.9.4
+        version: 1.9.4
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
     devDependencies:
       typescript:
         specifier: ^5.5.0
@@ -667,6 +674,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@fal-ai/client@1.9.4':
+    resolution: {integrity: sha512-mDjF2QDq+oficSSxzmErNkseQeRXnvUBEhJy39n4PPe7jRPZeSqM2SNb27SW50rDtCtay+stwFU8zRZehlt1Qg==}
+    engines: {node: '>=18.0.0'}
+
   '@hookform/resolvers@3.10.0':
     resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
     peerDependencies:
@@ -845,6 +856,10 @@ packages:
 
   '@microsoft/tsdoc@0.15.1':
     resolution: {integrity: sha512-4aErSrCR/On/e5G2hDP0wjooqDdauzEbIq8hIkIe5pXV0rtWJZvdCEKL0ykZxex+IxIwBp0eGeV48hQN07dXtw==}
+
+  '@msgpack/msgpack@3.1.3':
+    resolution: {integrity: sha512-47XIizs9XZXvuJgoaJUIE2lFoID8ugvc0jzSHP+Ptfk8nTbnR8g788wv48N03Kx0UkAv559HWRQ3yzOgzlRNUA==}
+    engines: {node: '>= 18'}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3':
     resolution: {integrity: sha512-QZHtlVgbAdy2zAqNA9Gu1UpIuI8Xvsd1v8ic6B2pZmeFnFcMWiPLfWXh7TVw4eGEZ/C9TH281KwhVoeQUKbyjw==}
@@ -1904,6 +1919,10 @@ packages:
     resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
     engines: {node: '>=0.8.x'}
 
+  eventsource-parser@1.1.2:
+    resolution: {integrity: sha512-v0eOBUbiaFojBu2s2NPBfYUoRR9GjcDNvCXVaqEf5vVfpIAh9f8RCo4vXTP8c63QRKCFwoLpMpTdPwwhEKVgzA==}
+    engines: {node: '>=14.18'}
+
   express@4.22.1:
     resolution: {integrity: sha512-F2X8g9P1X7uCPZMA3MVf9wcTqlyNp7IhH5qPCI0izhaOIYXaW9L535tGA3qmjRzpH+bZczqq7hVKxTR4NWnu+g==}
     engines: {node: '>= 0.10.0'}
@@ -2679,6 +2698,9 @@ packages:
   reusify@1.1.0:
     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
     engines: {iojs: '>=1.0.0', node: '>=0.10.0'}
+
+  robot3@0.4.1:
+    resolution: {integrity: sha512-hzjy826lrxzx8eRgv80idkf8ua1JAepRc9Efdtj03N3KNJuznQCPlyCJ7gnUmDFwZCLQjxy567mQVKmdv2BsXQ==}
 
   run-async@2.4.1:
     resolution: {integrity: sha512-tvVnVv01b8c1RrA6Ep7JkStj85Guv/YrMcwqYQnwjsAS2cTmmPGBBjAjpCW7RrSodNSoE2/qg9O4bceNvUuDgQ==}
@@ -3784,12 +3806,17 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
+  '@fal-ai/client@1.9.4':
+    dependencies:
+      '@msgpack/msgpack': 3.1.3
+      eventsource-parser: 1.1.2
+      robot3: 0.4.1
+
   '@hookform/resolvers@3.10.0(react-hook-form@7.71.2(react@19.2.4))':
     dependencies:
       react-hook-form: 7.71.2(react@19.2.4)
 
-  '@img/colour@1.1.0':
-    optional: true
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.34.5':
     optionalDependencies:
@@ -3924,6 +3951,8 @@ snapshots:
   '@lukeed/csprng@1.1.0': {}
 
   '@microsoft/tsdoc@0.15.1': {}
+
+  '@msgpack/msgpack@3.1.3': {}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3':
     optional: true
@@ -5025,8 +5054,7 @@ snapshots:
 
   destroy@1.2.0: {}
 
-  detect-libc@2.1.2:
-    optional: true
+  detect-libc@2.1.2: {}
 
   didyoumean@1.2.2: {}
 
@@ -5137,6 +5165,8 @@ snapshots:
   etag@1.8.1: {}
 
   events@3.3.0: {}
+
+  eventsource-parser@1.1.2: {}
 
   express@4.22.1:
     dependencies:
@@ -5938,6 +5968,8 @@ snapshots:
 
   reusify@1.1.0: {}
 
+  robot3@0.4.1: {}
+
   run-async@2.4.1: {}
 
   run-async@3.0.0: {}
@@ -6045,7 +6077,6 @@ snapshots:
       '@img/sharp-win32-arm64': 0.34.5
       '@img/sharp-win32-ia32': 0.34.5
       '@img/sharp-win32-x64': 0.34.5
-    optional: true
 
   shebang-command@2.0.0:
     dependencies:

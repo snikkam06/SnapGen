@@ -12,5 +12,9 @@
     },
     "devDependencies": {
         "typescript": "^5.5.0"
+    },
+    "dependencies": {
+        "@fal-ai/client": "^1.9.4",
+        "sharp": "^0.34.5"
     }
 }

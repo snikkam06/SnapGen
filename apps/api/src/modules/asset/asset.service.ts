@@ -4,10 +4,49 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { STORAGE_BUCKETS, UPLOAD_LIMITS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { assertUuid } from '../../utils/validation';
+
+type AssetListParams = {
+  kind?: string;
+  page?: number;
+  limit?: number;
+  sort?: string;
+};
+
+type AssetWithContext = Prisma.AssetGetPayload<{
+  include: {
+    jobAssets: {
+      include: {
+        job: {
+          select: {
+            id: true;
+            jobType: true;
+            prompt: true;
+            createdAt: true;
+            character: {
+              select: {
+                name: true;
+              };
+            };
+            stylePack: {
+              select: {
+                name: true;
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+}>;
+
+type AssetForSerialization = Prisma.AssetGetPayload<{}> & {
+  jobAssets?: AssetWithContext['jobAssets'];
+};
 
 @Injectable()
 export class AssetService {
@@ -16,12 +55,13 @@ export class AssetService {
     private storageService: StorageService,
   ) {}
 
-  async findAll(clerkUserId: string, params?: { kind?: string; page?: number; limit?: number }) {
+  async findAll(clerkUserId: string, params?: AssetListParams) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
-    const page = params?.page || 1;
-    const limit = params?.limit || 20;
+    const page = Math.max(1, params?.page || 1);
+    const limit = Math.min(Math.max(1, params?.limit || 24), 60);
+    const sort = params?.sort === 'oldest' ? 'oldest' : 'newest';
     const where: Record<string, unknown> = {
       userId: user.id,
       moderationStatus: { not: 'deleted' },
@@ -31,9 +71,36 @@ export class AssetService {
     const [items, total] = await Promise.all([
       this.prisma.asset.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: sort === 'oldest' ? 'asc' : 'desc' },
         skip: (page - 1) * limit,
         take: limit,
+        include: {
+          jobAssets: {
+            where: { relation: 'output' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: {
+              job: {
+                select: {
+                  id: true,
+                  jobType: true,
+                  prompt: true,
+                  createdAt: true,
+                  character: {
+                    select: {
+                      name: true,
+                    },
+                  },
+                  stylePack: {
+                    select: {
+                      name: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       }),
       this.prisma.asset.count({ where }),
     ]);
@@ -45,6 +112,7 @@ export class AssetService {
       total,
       page,
       limit,
+      sort,
       totalPages: Math.ceil(total / limit),
     };
   }
@@ -130,23 +198,38 @@ export class AssetService {
     return { id, deleted: true };
   }
 
-  private async serializeAsset(asset: {
-    id: string;
-    kind: string;
-    mimeType: string;
-    width: number | null;
-    height: number | null;
-    createdAt: Date;
-    storageBucket: string;
-    storageKey: string;
-    metadataJson: unknown;
-  }) {
+  private async serializeAsset(asset: AssetForSerialization) {
+    const metadata =
+      asset.metadataJson &&
+      typeof asset.metadataJson === 'object' &&
+      !Array.isArray(asset.metadataJson)
+        ? (asset.metadataJson as Record<string, unknown>)
+        : {};
+    const sourceJob = asset.jobAssets?.[0]?.job;
+
     return {
       id: asset.id,
       kind: asset.kind,
       mimeType: asset.mimeType,
       width: asset.width,
       height: asset.height,
+      fileSizeBytes: asset.fileSizeBytes.toString(),
+      durationSec: asset.durationSec ? Number(asset.durationSec) : null,
+      metadata: {
+        originalFileName:
+          typeof metadata.originalFileName === 'string' ? metadata.originalFileName : null,
+        uploadSource: typeof metadata.uploadSource === 'string' ? metadata.uploadSource : null,
+      },
+      sourceJob: sourceJob
+        ? {
+            id: sourceJob.id,
+            jobType: sourceJob.jobType,
+            prompt: sourceJob.prompt,
+            createdAt: sourceJob.createdAt.toISOString(),
+            characterName: sourceJob.character?.name || null,
+            stylePackName: sourceJob.stylePack?.name || null,
+          }
+        : null,
       url: await this.storageService.getAssetUrl(asset),
       createdAt: asset.createdAt.toISOString(),
     };
