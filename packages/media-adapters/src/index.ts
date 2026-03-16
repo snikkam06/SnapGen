@@ -264,7 +264,7 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   const optimizedImage = await optimizeImageForFalUpload(originalBuffer);
   if (optimizedImage.byteLength > FAL_MAX_UPLOAD_BYTES) {
     throw new Error(
-      'Source image is too large for Fal video generation even after optimization. Try a smaller image.',
+      'Source image is too large for Fal processing even after optimization. Try a smaller image.',
     );
   }
 
@@ -449,10 +449,11 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     status: 'queued' | 'running' | 'completed';
   }> {
     const endpointPath = this.resolveEndpointPath(input);
+    const preparedInput = await this.prepareInput(endpointPath, input);
     const requestCount = Math.max(1, input.numImages ?? 1);
     const requests = await Promise.all(
       Array.from({ length: requestCount }, (_, index) =>
-        this.submitJob(endpointPath, input, index),
+        this.submitJob(endpointPath, preparedInput, index),
       ),
     );
 
@@ -591,6 +592,24 @@ export class FalImageAdapter implements ImageGenerationAdapter {
 
   private resolveEndpointPath(input: ImageGenerationInput): string {
     return input.referenceImages?.length ? this.editSubmitEndpointPath : this.textSubmitEndpointPath;
+  }
+
+  private async prepareInput(
+    endpointPath: string,
+    input: ImageGenerationInput,
+  ): Promise<ImageGenerationInput> {
+    if (endpointPath !== this.editSubmitEndpointPath || !input.referenceImages?.length) {
+      return input;
+    }
+
+    return {
+      ...input,
+      referenceImages: await Promise.all(
+        input.referenceImages.slice(0, 9).map((imageUrl) =>
+          normalizeFalInputImageUrl(this.apiKey, imageUrl),
+        ),
+      ),
+    };
   }
 
   private buildRequestPayload(
