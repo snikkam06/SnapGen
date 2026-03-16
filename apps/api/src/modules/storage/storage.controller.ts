@@ -1,9 +1,28 @@
-import { Controller, Get, Put, Query, Req, Res, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Put, Query, Req, Res, NotFoundException, BadRequestException, UseGuards } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { StorageService } from './storage.service';
+import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
 import * as path from 'path';
 
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+
+function validateStoragePath(bucket: string, key: string): void {
+    // Prevent path traversal: no ".." segments, no absolute paths in key
+    if (bucket.includes('..') || bucket.startsWith('/')) {
+        throw new BadRequestException('Invalid bucket name');
+    }
+    if (key.includes('..') || key.startsWith('/')) {
+        throw new BadRequestException('Invalid key');
+    }
+    // Ensure resolved path stays within expected directory
+    const normalized = path.normalize(path.join(bucket, key));
+    if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
+        throw new BadRequestException('Invalid storage path');
+    }
+}
+
 @Controller('v1/storage')
+@UseGuards(ClerkAuthGuard)
 export class StorageController {
     constructor(private storageService: StorageService) {}
 
@@ -16,6 +35,8 @@ export class StorageController {
         if (!bucket || !key) {
             throw new NotFoundException('Missing bucket or key');
         }
+
+        validateStoragePath(bucket, key);
 
         try {
             const buffer = await this.storageService.getLocalFileBuffer(bucket, key);
@@ -49,8 +70,16 @@ export class StorageController {
             return;
         }
 
+        validateStoragePath(bucket, key);
+
         const chunks: Buffer[] = [];
+        let totalSize = 0;
         for await (const chunk of req as any) {
+            totalSize += chunk.length;
+            if (totalSize > MAX_UPLOAD_SIZE) {
+                res.status(413).json({ message: 'File too large (max 50MB)' });
+                return;
+            }
             chunks.push(Buffer.from(chunk));
         }
         const buffer = Buffer.concat(chunks);

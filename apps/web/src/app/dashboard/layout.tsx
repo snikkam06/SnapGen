@@ -16,7 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Wand2,
-  ArrowUpCircle,
+
   LogOut,
   Menu,
   Video,
@@ -36,7 +36,7 @@ const navigation = [
   { name: 'Video', href: '/dashboard/video', icon: Video },
   { name: 'Gallery', href: '/dashboard/gallery', icon: FolderOpen },
   { name: 'Face Swap', href: '/dashboard/faceswap', icon: Layers },
-  { name: 'Upscale', href: '/dashboard/upscale', icon: ArrowUpCircle },
+
   { name: 'Jobs', href: '/dashboard/jobs', icon: Sparkles },
   { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },
   { name: 'Settings', href: '/dashboard/settings', icon: Settings },
@@ -111,7 +111,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {navigation.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+            const isActive = item.href === '/dashboard'
+              ? pathname === '/dashboard'
+              : pathname === item.href || pathname.startsWith(item.href + '/');
             return (
               <Link
                 key={item.name}
@@ -135,7 +137,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           {process.env.NEXT_PUBLIC_SHOW_ADMIN === 'true' && (
             <div className="pt-4 mt-4 border-t border-white/5">
               {adminNavigation.map((item) => {
-                const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+                const isActive = item.href === '/dashboard'
+              ? pathname === '/dashboard'
+              : pathname === item.href || pathname.startsWith(item.href + '/');
                 return (
                   <Link
                     key={item.name}

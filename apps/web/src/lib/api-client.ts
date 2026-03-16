@@ -137,10 +137,6 @@ class ApiClient {
         return this.request('/v1/generations/faceswap-image', { method: 'POST', token, body: JSON.stringify(data) });
     }
 
-    async upscaleImage(token: string, data: Record<string, unknown>) {
-        return this.request('/v1/generations/upscale', { method: 'POST', token, body: JSON.stringify(data) });
-    }
-
     // Jobs
     async getJobs(token: string, params?: Record<string, string>) {
         const query = params ? '?' + new URLSearchParams(params).toString() : '';

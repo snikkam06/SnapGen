@@ -43,7 +43,7 @@ export interface PlanFeatures {
   maxImagesPerJob: number;
   videoGeneration: boolean;
   faceSwap: boolean;
-  upscale: boolean;
+
   priorityQueue: boolean;
   apiAccess?: boolean;
   whiteLabel?: boolean;
@@ -123,7 +123,7 @@ export interface UploadUrlResponse {
 }
 
 // ─── Generation ──────────────────────────────────────
-export type JobType = 'image' | 'video' | 'faceswap-image' | 'faceswap-video' | 'upscale';
+export type JobType = 'image' | 'video' | 'faceswap-image' | 'faceswap-video';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 
 export interface ImageGenerationInput {
@@ -160,11 +160,6 @@ export interface FaceSwapImageInput {
 export interface FaceSwapVideoInput {
   sourceFaceAssetId: string;
   targetVideoAssetId: string;
-}
-
-export interface UpscaleInput {
-  assetId: string;
-  mode?: 'realism' | 'quality' | 'detail';
 }
 
 export interface TrainModelInput {

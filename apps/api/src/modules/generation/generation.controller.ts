@@ -53,9 +53,4 @@ export class GenerationController {
     return this.generationService.createFaceSwapImageJob(user.clerkUserId, body);
   }
 
-  @Post('upscale')
-  @ApiOperation({ summary: 'Upscale image' })
-  async upscale(@CurrentUser() user: AuthUser, @Body() body: { assetId: string; mode?: string }) {
-    return this.generationService.createUpscaleJob(user.clerkUserId, body);
-  }
 }

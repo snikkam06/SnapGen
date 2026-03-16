@@ -30,9 +30,14 @@ interface JobDetail {
     outputs: JobOutput[];
 }
 
+interface UploadedAsset {
+    id: string;
+    previewUrl: string;
+}
+
 export default function FaceSwapPage() {
-    const [sourceImage, setSourceImage] = useState<string | null>(null);
-    const [targetImage, setTargetImage] = useState<string | null>(null);
+    const [sourceAsset, setSourceAsset] = useState<UploadedAsset | null>(null);
+    const [targetAsset, setTargetAsset] = useState<UploadedAsset | null>(null);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
     const sourceInputRef = useRef<HTMLInputElement>(null);
@@ -52,15 +57,33 @@ export default function FaceSwapPage() {
         queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
     });
 
+    const uploadMutation = useMutation({
+        mutationFn: async ({ file, target }: { file: File; target: 'source' | 'target' }) => {
+            if (!token) throw new Error('Authentication token unavailable');
+            const result = await api.uploadImageAsset(token, file) as { id: string; url: string };
+            return { ...result, target };
+        },
+        onSuccess: (result) => {
+            const previewUrl = result.url;
+            if (result.target === 'source') {
+                setSourceAsset({ id: result.id, previewUrl });
+            } else {
+                setTargetAsset({ id: result.id, previewUrl });
+            }
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to upload image');
+        },
+    });
+
     const faceSwapMutation = useMutation({
         mutationFn: async () => {
-            if (!token) {
-                throw new Error('Authentication token unavailable');
-            }
+            if (!token) throw new Error('Authentication token unavailable');
+            if (!sourceAsset || !targetAsset) throw new Error('Please upload both images');
 
             return api.faceSwapImage(token, {
-                sourceAssetId: 'placeholder-source-asset-id',
-                targetAssetId: 'placeholder-target-asset-id',
+                sourceAssetId: sourceAsset.id,
+                targetAssetId: targetAsset.id,
             }) as Promise<{ id: string }>;
         },
         onSuccess: async (job) => {
@@ -76,6 +99,7 @@ export default function FaceSwapPage() {
         },
     });
 
+    const isUploading = uploadMutation.isPending;
     const isProcessing =
         faceSwapMutation.isPending ||
         jobQuery.data?.status === 'queued' ||
@@ -85,7 +109,7 @@ export default function FaceSwapPage() {
 
     const handleFileSelect = (
         event: React.ChangeEvent<HTMLInputElement>,
-        setter: (url: string | null) => void,
+        target: 'source' | 'target',
     ) => {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -95,21 +119,29 @@ export default function FaceSwapPage() {
             return;
         }
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            setter(e.target?.result as string);
-        };
-        reader.onerror = () => {
-            toast.error('Failed to read file');
-        };
-        reader.readAsDataURL(file);
+        if (file.size > 50 * 1024 * 1024) {
+            toast.error('Image must be under 50MB');
+            return;
+        }
+
+        uploadMutation.mutate({ file, target });
+    };
+
+    const clearSource = () => {
+        setSourceAsset(null);
+        if (sourceInputRef.current) sourceInputRef.current.value = '';
+    };
+
+    const clearTarget = () => {
+        setTargetAsset(null);
+        if (targetInputRef.current) targetInputRef.current.value = '';
     };
 
     return (
         <div className="space-y-6">
             <div className="page-header">
                 <h1 className="page-title">Face Swap</h1>
-                <p className="page-description">Seamlessly swap faces in images and videos.</p>
+                <p className="page-description">Seamlessly swap faces in images.</p>
             </div>
 
             <div className="glass-card p-4 flex items-start gap-3 border-purple-500/20">
@@ -119,7 +151,7 @@ export default function FaceSwapPage() {
                         Upload a source face and a target image. The AI will replace the face in the target
                         with the source face while maintaining natural proportions and lighting.
                     </p>
-                    <p className="text-xs text-white/40 mt-1">Cost: 10 credits per image, 30 credits per video</p>
+                    <p className="text-xs text-white/40 mt-1">Cost: 10 credits per swap</p>
                 </div>
             </div>
 
@@ -130,27 +162,31 @@ export default function FaceSwapPage() {
                     <input
                         ref={sourceInputRef}
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp"
                         className="hidden"
-                        onChange={(e) => handleFileSelect(e, setSourceImage)}
+                        onChange={(e) => handleFileSelect(e, 'source')}
                     />
                     <div
                         className="glass-card aspect-square flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-white/10 transition-colors relative"
-                        onClick={() => sourceInputRef.current?.click()}
+                        onClick={() => !isUploading && sourceInputRef.current?.click()}
                     >
-                        {sourceImage ? (
+                        {sourceAsset ? (
                             <>
-                                <img src={sourceImage} alt="Source" className="w-full h-full object-cover rounded-xl" />
+                                <img src={sourceAsset.previewUrl} alt="Source" className="w-full h-full object-cover rounded-xl" />
                                 <button
                                     className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        setSourceImage(null);
-                                        if (sourceInputRef.current) sourceInputRef.current.value = '';
+                                        clearSource();
                                     }}
                                 >
                                     <X className="w-4 h-4 text-white/70" />
                                 </button>
+                            </>
+                        ) : isUploading && uploadMutation.variables?.target === 'source' ? (
+                            <>
+                                <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
+                                <p className="text-sm text-white/30">Uploading...</p>
                             </>
                         ) : (
                             <>
@@ -167,27 +203,31 @@ export default function FaceSwapPage() {
                     <input
                         ref={targetInputRef}
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp"
                         className="hidden"
-                        onChange={(e) => handleFileSelect(e, setTargetImage)}
+                        onChange={(e) => handleFileSelect(e, 'target')}
                     />
                     <div
                         className="glass-card aspect-square flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-white/10 transition-colors relative"
-                        onClick={() => targetInputRef.current?.click()}
+                        onClick={() => !isUploading && targetInputRef.current?.click()}
                     >
-                        {targetImage ? (
+                        {targetAsset ? (
                             <>
-                                <img src={targetImage} alt="Target" className="w-full h-full object-cover rounded-xl" />
+                                <img src={targetAsset.previewUrl} alt="Target" className="w-full h-full object-cover rounded-xl" />
                                 <button
                                     className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        setTargetImage(null);
-                                        if (targetInputRef.current) targetInputRef.current.value = '';
+                                        clearTarget();
                                     }}
                                 >
                                     <X className="w-4 h-4 text-white/70" />
                                 </button>
+                            </>
+                        ) : isUploading && uploadMutation.variables?.target === 'target' ? (
+                            <>
+                                <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
+                                <p className="text-sm text-white/30">Uploading...</p>
                             </>
                         ) : (
                             <>
@@ -203,7 +243,7 @@ export default function FaceSwapPage() {
             <div className="flex justify-center gap-3">
                 <button
                     onClick={() => faceSwapMutation.mutate()}
-                    disabled={!sourceImage || !targetImage || isProcessing}
+                    disabled={!sourceAsset || !targetAsset || isProcessing || isUploading}
                     className="btn-primary px-10 py-4 text-base"
                 >
                     {isProcessing ? (

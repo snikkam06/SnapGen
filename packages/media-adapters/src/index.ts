@@ -56,8 +56,7 @@ export interface VideoGenerationAdapter {
 // ─── Face Swap ───────────────────────────────────────
 export interface FaceSwapInput {
   sourceFaceUrl: string;
-  targetMediaUrl: string;
-  mediaType: 'image' | 'video';
+  targetImageUrl: string;
 }
 
 export interface FaceSwapAdapter {
@@ -69,26 +68,6 @@ export interface FaceSwapAdapter {
   getJob(externalJobId: string): Promise<{
     status: 'queued' | 'running' | 'completed' | 'failed';
     outputs?: Array<{ url: string; mimeType: string }>;
-    errorMessage?: string;
-  }>;
-}
-
-// ─── Upscale ─────────────────────────────────────────
-export interface UpscaleInput {
-  imageUrl: string;
-  scale?: number;
-  mode?: 'realism' | 'quality' | 'detail';
-}
-
-export interface UpscaleAdapter {
-  readonly providerName: string;
-  createJob(input: UpscaleInput): Promise<{
-    externalJobId: string;
-    status: 'queued' | 'running' | 'completed';
-  }>;
-  getJob(externalJobId: string): Promise<{
-    status: 'queued' | 'running' | 'completed' | 'failed';
-    outputs?: Array<{ url: string; mimeType: string; width: number; height: number }>;
     errorMessage?: string;
   }>;
 }
@@ -264,7 +243,7 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   const optimizedImage = await optimizeImageForFalUpload(originalBuffer);
   if (optimizedImage.byteLength > FAL_MAX_UPLOAD_BYTES) {
     throw new Error(
-      'Source image is too large for Fal processing even after optimization. Try a smaller image.',
+      'Source image is too large for Fal video generation even after optimization. Try a smaller image.',
     );
   }
 
@@ -449,11 +428,10 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     status: 'queued' | 'running' | 'completed';
   }> {
     const endpointPath = this.resolveEndpointPath(input);
-    const preparedInput = await this.prepareInput(endpointPath, input);
     const requestCount = Math.max(1, input.numImages ?? 1);
     const requests = await Promise.all(
       Array.from({ length: requestCount }, (_, index) =>
-        this.submitJob(endpointPath, preparedInput, index),
+        this.submitJob(endpointPath, input, index),
       ),
     );
 
@@ -592,24 +570,6 @@ export class FalImageAdapter implements ImageGenerationAdapter {
 
   private resolveEndpointPath(input: ImageGenerationInput): string {
     return input.referenceImages?.length ? this.editSubmitEndpointPath : this.textSubmitEndpointPath;
-  }
-
-  private async prepareInput(
-    endpointPath: string,
-    input: ImageGenerationInput,
-  ): Promise<ImageGenerationInput> {
-    if (endpointPath !== this.editSubmitEndpointPath || !input.referenceImages?.length) {
-      return input;
-    }
-
-    return {
-      ...input,
-      referenceImages: await Promise.all(
-        input.referenceImages.slice(0, 9).map((imageUrl) =>
-          normalizeFalInputImageUrl(this.apiKey, imageUrl),
-        ),
-      ),
-    };
   }
 
   private buildRequestPayload(
@@ -1379,5 +1339,163 @@ export function createVideoAdapter(provider: string, apiKey: string): VideoGener
       return new MockVideoAdapter();
     default:
       throw new Error(`Unknown video provider: ${provider}`);
+  }
+}
+
+// ─── Face Swap Prompt ───────────────────────────────
+const FAL_FACESWAP_PROMPT = [
+  'Replace the face in the target image with the face from the source image.',
+  'Preserve the source face identity exactly: bone structure, facial proportions, skin tone, eye color, eyebrow shape, lip shape, and all distinguishing facial features.',
+  'Match the target image lighting, shadows, color grading, and ambient tones so the swapped face blends naturally.',
+  'Keep the target image pose, head angle, gaze direction, neck, hair, clothing, accessories, background, and body completely unchanged.',
+  'The result must look like an authentic unedited photograph with natural skin texture, visible pores, subtle imperfections, and realistic micro-details.',
+  'No visible seams, no blending artifacts, no skin smoothing, no plastic or airbrushed appearance, no AI artifacts.',
+].join(' ');
+
+// ─── Fal.ai Seedream Face Swap Implementation ──────
+export class FalFaceSwapAdapter implements FaceSwapAdapter {
+  readonly providerName = 'fal';
+  private apiKey: string;
+  private editEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  async createJob(input: FaceSwapInput): Promise<{
+    externalJobId: string;
+    status: 'queued' | 'running' | 'completed';
+  }> {
+    ensureFalApiKey(this.apiKey, 'fal.ai face swap');
+
+    const [sourceFaceUrl, targetImageUrl] = await Promise.all([
+      normalizeFalInputImageUrl(this.apiKey, input.sourceFaceUrl),
+      normalizeFalInputImageUrl(this.apiKey, input.targetImageUrl),
+    ]);
+
+    const prompt = [
+      FAL_FACESWAP_PROMPT,
+      FAL_PHOTOREALISTIC_PROMPT_SUFFIX,
+      `Avoid: ${FAL_DEFAULT_NEGATIVE_PROMPT}, face morph artifacts, mismatched skin tone, blending seams, double features, warped facial features`,
+    ].join('\n\n');
+
+    const data = await submitFalQueueRequest(this.apiKey, this.editEndpointPath, {
+      prompt,
+      image_urls: [sourceFaceUrl, targetImageUrl],
+      safety_tolerance: 5,
+      enable_safety_checker: false,
+      output_format: 'jpeg',
+    });
+
+    const status = mapFalStatus(data.status);
+    if (status === 'failed') {
+      throw new Error('Fal face swap job failed to start');
+    }
+
+    const externalJobId = data.response_url ?? data.request_id ?? `fal-faceswap-${Date.now()}`;
+
+    return {
+      externalJobId,
+      status,
+    };
+  }
+
+  async getJob(externalJobId: string): Promise<{
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    outputs?: Array<{ url: string; mimeType: string }>;
+    errorMessage?: string;
+  }> {
+    try {
+      const status = await getFalQueueStatus(this.apiKey, this.editEndpointPath, externalJobId);
+      const mappedStatus = mapFalStatus(status.status);
+      const logSummary = formatFalLogs(status);
+
+      if (mappedStatus !== 'completed') {
+        return {
+          status: mappedStatus,
+          errorMessage: status.error || logSummary,
+        };
+      }
+
+      const inlineResponse = extractFalResponse<FalImageResponse>(
+        status as unknown as Record<string, unknown>,
+      );
+      const result = await getFalQueueResult<FalImageResponse>(
+        this.apiKey,
+        this.editEndpointPath,
+        externalJobId,
+        status.response_url,
+      );
+      const responseBody =
+        inlineResponse ??
+        extractFalResponse<FalImageResponse>(result as unknown as Record<string, unknown>);
+      const outputs =
+        responseBody?.images?.map((img) => ({
+          url: img.url,
+          mimeType: img.content_type || 'image/jpeg',
+        })) ?? [];
+
+      if (!outputs.length) {
+        return {
+          status: 'failed',
+          errorMessage:
+            result.error || status.error || logSummary || 'Fal face swap returned no outputs',
+        };
+      }
+
+      return {
+        status: 'completed',
+        outputs,
+      };
+    } catch (error) {
+      return {
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'Failed to fetch Fal face swap job',
+      };
+    }
+  }
+}
+
+// ─── Mock Face Swap Adapter ─────────────────────────
+export class MockFaceSwapAdapter implements FaceSwapAdapter {
+  readonly providerName = 'mock';
+
+  async createJob(_input: FaceSwapInput): Promise<{
+    externalJobId: string;
+    status: 'queued' | 'running' | 'completed';
+  }> {
+    console.log('[MockFaceSwapAdapter] Creating face swap job');
+    return {
+      externalJobId: `mock-faceswap-${Date.now()}`,
+      status: 'completed' as const,
+    };
+  }
+
+  async getJob(externalJobId: string): Promise<{
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    outputs?: Array<{ url: string; mimeType: string }>;
+    errorMessage?: string;
+  }> {
+    return {
+      status: 'completed' as const,
+      outputs: [
+        {
+          url: `https://picsum.photos/seed/${externalJobId}/1024/1024`,
+          mimeType: 'image/jpeg',
+        },
+      ],
+    };
+  }
+}
+
+// ─── Face Swap Provider Factory ─────────────────────
+export function createFaceSwapAdapter(provider: string, apiKey: string): FaceSwapAdapter {
+  switch (provider) {
+    case 'fal':
+      return new FalFaceSwapAdapter(apiKey);
+    case 'mock':
+      return new MockFaceSwapAdapter();
+    default:
+      throw new Error(`Unknown face swap provider: ${provider}`);
   }
 }

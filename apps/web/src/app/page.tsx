@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import {
     Sparkles,
-    Zap,
     Shield,
     Image as ImageIcon,
     Video,
@@ -128,12 +127,6 @@ export default function LandingPage() {
                                 title: 'Face Swap',
                                 description: 'Seamlessly swap faces in images and videos. Perfect for creating variations and custom scenarios.',
                                 gradient: 'from-orange-500 to-amber-500',
-                            },
-                            {
-                                icon: Zap,
-                                title: 'Instant Upscaling',
-                                description: '4x upscale your generated images with AI super-resolution. Get print-quality results every time.',
-                                gradient: 'from-green-500 to-emerald-500',
                             },
                             {
                                 icon: Shield,

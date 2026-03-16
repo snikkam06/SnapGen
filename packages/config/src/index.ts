@@ -12,7 +12,7 @@ export const CREDIT_COSTS = {
     video: 25,
     'faceswap-image': 10,
     'faceswap-video': 30,
-    upscale: 3,
+
     training: 100,
 } as const;
 
@@ -44,10 +44,6 @@ export const JOB_DEFAULTS = {
     video: {
         durationSec: 5,
         aspectRatio: '9:16',
-    },
-    upscale: {
-        mode: 'realism' as const,
-        scale: 2,
     },
 } as const;
 

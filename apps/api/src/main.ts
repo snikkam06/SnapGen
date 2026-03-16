@@ -1,9 +1,14 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'node:path';
 import net from 'node:net';
+
+// Load .env from the monorepo root
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { json } from 'express';
+import helmet from 'helmet';
 
 async function isRedisReachable(redisUrl?: string): Promise<boolean> {
     if (!redisUrl) {
@@ -36,6 +41,9 @@ async function bootstrap() {
     const { AppModule } = await import('./app.module');
     const app = await NestFactory.create(AppModule, { rawBody: true });
 
+    // Security headers
+    app.use(helmet());
+
     // Increase body size limit for file uploads
     app.use(json({ limit: '50mb' }));
 
@@ -43,8 +51,13 @@ async function bootstrap() {
     app.setGlobalPrefix('api');
 
     // CORS
+    const corsOrigin = process.env.APP_URL;
+    if (!corsOrigin && process.env.NODE_ENV === 'production') {
+        console.error('FATAL: APP_URL must be set in production');
+        process.exit(1);
+    }
     app.enableCors({
-        origin: process.env.APP_URL || 'http://localhost:3000',
+        origin: corsOrigin || 'http://localhost:3000',
         credentials: true,
     });
 
@@ -57,25 +70,27 @@ async function bootstrap() {
         }),
     );
 
-    // Swagger
-    const config = new DocumentBuilder()
-        .setTitle('SnapGen API')
-        .setDescription('AI Image & Video Generation Platform API')
-        .setVersion('1.0')
-        .addBearerAuth()
-        .addTag('auth', 'Authentication endpoints')
-        .addTag('me', 'User profile endpoints')
-        .addTag('billing', 'Billing and credit endpoints')
-        .addTag('characters', 'Character management endpoints')
-        .addTag('generations', 'Content generation endpoints')
-        .addTag('jobs', 'Job management endpoints')
-        .addTag('assets', 'Asset management endpoints')
-        .addTag('webhooks', 'Webhook endpoints')
-        .addTag('admin', 'Admin endpoints')
-        .build();
+    // Swagger (disabled in production)
+    if (process.env.NODE_ENV !== 'production') {
+        const config = new DocumentBuilder()
+            .setTitle('SnapGen API')
+            .setDescription('AI Image & Video Generation Platform API')
+            .setVersion('1.0')
+            .addBearerAuth()
+            .addTag('auth', 'Authentication endpoints')
+            .addTag('me', 'User profile endpoints')
+            .addTag('billing', 'Billing and credit endpoints')
+            .addTag('characters', 'Character management endpoints')
+            .addTag('generations', 'Content generation endpoints')
+            .addTag('jobs', 'Job management endpoints')
+            .addTag('assets', 'Asset management endpoints')
+            .addTag('webhooks', 'Webhook endpoints')
+            .addTag('admin', 'Admin endpoints')
+            .build();
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('api/docs', app, document);
+        const document = SwaggerModule.createDocument(app, config);
+        SwaggerModule.setup('api/docs', app, document);
+    }
 
     const port = process.env.PORT || 3001;
     await app.listen(port);

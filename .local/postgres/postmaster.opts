@@ -1,1 +1,0 @@
-/Library/PostgreSQL/18/bin/postgres "-D" "/Users/sainikkam/imageGen/.local/postgres" "-p" "55432"

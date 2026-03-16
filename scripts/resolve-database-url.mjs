@@ -9,7 +9,7 @@ if (process.env.DATABASE_URL) {
     process.exit(0);
 }
 
-const envPath = path.join(repoRoot, 'apps/api/.env');
+const envPath = path.join(repoRoot, '.env');
 const envContents = fs.readFileSync(envPath, 'utf8');
 const databaseUrlLine = envContents
     .split(/\r?\n/)

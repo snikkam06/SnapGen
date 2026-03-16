@@ -71,9 +71,18 @@ export class StorageService {
     return `${apiUrl}/api/v1/storage/files?bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(key)}`;
   }
 
+  private validatePath(baseDir: string, bucket: string, key: string): string {
+    const filePath = path.resolve(baseDir, bucket, key);
+    const resolvedBase = path.resolve(baseDir);
+    if (!filePath.startsWith(resolvedBase + path.sep) && filePath !== resolvedBase) {
+      throw new Error('Path traversal detected');
+    }
+    return filePath;
+  }
+
   private getLocalFilePaths(bucket: string, key: string): string[] {
     return [this.uploadsDir, ...this.legacyUploadsDirs].map((baseDir) =>
-      path.join(baseDir, bucket, key),
+      this.validatePath(baseDir, bucket, key),
     );
   }
 
@@ -138,7 +147,7 @@ export class StorageService {
   }
 
   async saveFileLocally(bucket: string, key: string, buffer: Buffer): Promise<void> {
-    const filePath = path.join(this.uploadsDir, bucket, key);
+    const filePath = this.validatePath(this.uploadsDir, bucket, key);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, buffer);
   }

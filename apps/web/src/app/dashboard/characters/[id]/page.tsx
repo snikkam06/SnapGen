@@ -11,6 +11,7 @@ import {
     Sparkles,
     Users,
     Loader2,
+    Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApiToken } from '@/hooks/use-api-token';
@@ -91,6 +92,23 @@ export default function CharacterDetailPage() {
         },
     });
 
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+    const deleteMutation = useMutation({
+        mutationFn: async () => {
+            if (!token) throw new Error('Authentication token unavailable');
+            return api.deleteCharacter(token, characterId);
+        },
+        onSuccess: async () => {
+            toast.success('Character deleted');
+            await queryClient.invalidateQueries({ queryKey: ['characters'] });
+            router.push('/dashboard/characters');
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to delete character');
+        },
+    });
+
     const character = characterQuery.data;
     const totalImages = character?.datasets.reduce((sum, d) => sum + d.imageCount, 0) ?? 0;
 
@@ -157,6 +175,13 @@ export default function CharacterDetailPage() {
                         <Sparkles className="w-4 h-4 mr-2" />
                         Generate with Character
                     </Link>
+                    <button
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className="btn-secondary px-3 text-red-400 hover:text-red-300 hover:border-red-500/30"
+                        title="Delete character"
+                    >
+                        <Trash2 className="w-4 h-4" />
+                    </button>
                 </div>
             </div>
 
@@ -214,6 +239,33 @@ export default function CharacterDetailPage() {
                     </div>
                 )}
             </div>
+
+            {showDeleteConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <div className="glass-card p-6 w-full max-w-md mx-4 animate-slide-up">
+                        <h2 className="text-xl font-bold mb-2">Delete Character</h2>
+                        <p className="text-sm text-white/50 mb-6">
+                            Are you sure you want to delete <strong className="text-white">{character.name}</strong>? This will remove the character and all associated datasets and models. This action cannot be undone.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setShowDeleteConfirm(false)}
+                                className="btn-secondary flex-1"
+                                disabled={deleteMutation.isPending}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => deleteMutation.mutate()}
+                                disabled={deleteMutation.isPending}
+                                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
+                            >
+                                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

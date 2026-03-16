@@ -10,6 +10,7 @@ import {
     Upload,
     Sparkles,
     Cpu,
+    Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApiToken } from '@/hooks/use-api-token';
@@ -98,6 +99,23 @@ export default function CharactersPage() {
         },
         onError: (error) => {
             toast.error(error instanceof Error ? error.message : 'Failed to start training');
+        },
+    });
+
+    const [deleteTarget, setDeleteTarget] = useState<Character | null>(null);
+
+    const deleteCharacterMutation = useMutation({
+        mutationFn: async (characterId: string) => {
+            if (!token) throw new Error('Authentication token unavailable');
+            return api.deleteCharacter(token, characterId);
+        },
+        onSuccess: async () => {
+            setDeleteTarget(null);
+            toast.success('Character deleted');
+            await queryClient.invalidateQueries({ queryKey: ['characters'] });
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to delete character');
         },
     });
 
@@ -224,6 +242,13 @@ export default function CharactersPage() {
                                         <Sparkles className="w-4 h-4 mr-2 inline-flex" />
                                         Use
                                     </Link>
+                                    <button
+                                        onClick={() => setDeleteTarget(character)}
+                                        className="btn-secondary px-3 text-red-400 hover:text-red-300 hover:border-red-500/30"
+                                        title="Delete character"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -285,6 +310,33 @@ export default function CharactersPage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {deleteTarget && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <div className="glass-card p-6 w-full max-w-md mx-4 animate-slide-up">
+                        <h2 className="text-xl font-bold mb-2">Delete Character</h2>
+                        <p className="text-sm text-white/50 mb-6">
+                            Are you sure you want to delete <strong className="text-white">{deleteTarget.name}</strong>? This will remove the character and all associated datasets and models. This action cannot be undone.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setDeleteTarget(null)}
+                                className="btn-secondary flex-1"
+                                disabled={deleteCharacterMutation.isPending}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => deleteCharacterMutation.mutate(deleteTarget.id)}
+                                disabled={deleteCharacterMutation.isPending}
+                                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
+                            >
+                                {deleteCharacterMutation.isPending ? 'Deleting...' : 'Delete'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

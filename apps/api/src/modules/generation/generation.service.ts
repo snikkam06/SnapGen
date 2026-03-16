@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Prisma, GenerationJob } from '@prisma/client';
-import { createImageAdapter, createVideoAdapter } from '@snapgen/media-adapters';
+import { createImageAdapter, createVideoAdapter, createFaceSwapAdapter } from '@snapgen/media-adapters';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CREDIT_COSTS } from '@snapgen/config';
 import { StorageService } from '../storage/storage.service';
@@ -224,23 +224,231 @@ export class GenerationService {
   }
 
   async createFaceSwapImageJob(
-    _clerkUserId: string,
-    _data: {
+    clerkUserId: string,
+    data: {
       sourceAssetId: string;
       targetAssetId: string;
     },
   ) {
-    throw new NotImplementedException('Face swap image jobs are not implemented on the server');
+    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const sourceAssetId = assertNonEmptyString(data.sourceAssetId, 'sourceAssetId');
+    const targetAssetId = assertNonEmptyString(data.targetAssetId, 'targetAssetId');
+
+    const [sourceAsset, targetAsset] = await Promise.all([
+      this.resolveUserImageAsset(user.id, sourceAssetId),
+      this.resolveUserImageAsset(user.id, targetAssetId),
+    ]);
+
+    const provider = this.getFaceSwapProvider();
+    this.ensureProviderConfigured(provider, 'image');
+    const totalCost = CREDIT_COSTS['faceswap-image'];
+
+    const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      const balance = await this.getBalance(user.id, tx);
+      if (balance < totalCost) {
+        throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
+      }
+
+      const createdJob = await tx.generationJob.create({
+        data: {
+          userId: user.id,
+          jobType: 'faceswap-image',
+          status: 'queued',
+          prompt: 'Face swap',
+          settingsJson: {
+            sourceFaceUrl: sourceAsset.url,
+            targetImageUrl: targetAsset.url,
+            sourceAssetId: sourceAsset.id,
+            targetAssetId: targetAsset.id,
+          } as Prisma.InputJsonValue,
+          provider,
+          reservedCredits: totalCost,
+        },
+      });
+
+      await tx.creditLedger.create({
+        data: {
+          userId: user.id,
+          amount: -totalCost,
+          entryType: 'job_reservation',
+          reason: 'Face swap image',
+          referenceType: 'job',
+          referenceId: createdJob.id,
+        },
+      });
+
+      await tx.jobAsset.createMany({
+        data: [
+          { jobId: createdJob.id, assetId: sourceAsset.id, relation: 'input' },
+          { jobId: createdJob.id, assetId: targetAsset.id, relation: 'input' },
+        ],
+      });
+
+      return createdJob;
+    });
+
+    await this.dispatchFaceSwapJob(job.id);
+
+    return {
+      id: job.id,
+      status: job.status,
+      reservedCredits: job.reservedCredits,
+      message: 'Face swap job queued',
+    };
   }
 
-  async createUpscaleJob(
-    _clerkUserId: string,
-    _data: {
-      assetId: string;
-      mode?: string;
-    },
-  ) {
-    throw new NotImplementedException('Upscale jobs are not implemented on the server');
+  private getFaceSwapProvider(): string {
+    if (process.env.FAL_API_KEY) {
+      return 'fal';
+    }
+    return 'mock';
+  }
+
+  private async dispatchFaceSwapJob(jobId: string): Promise<void> {
+    // Face swap uses the image queue if available, otherwise runs inline
+    if (!this.imageQueue) {
+      this.runFaceSwapJobInline(jobId);
+      return;
+    }
+
+    if (!(await this.hasActiveImageWorkers())) {
+      console.warn(
+        `[GenerationService] No active workers detected. Processing face swap job ${jobId} inline.`,
+      );
+      this.runFaceSwapJobInline(jobId);
+      return;
+    }
+
+    try {
+      await this.imageQueue.add('faceswap-image', { jobId });
+    } catch (error) {
+      console.warn(
+        `[GenerationService] Failed to enqueue face swap job ${jobId}. Falling back to inline processing.`,
+        error,
+      );
+      this.runFaceSwapJobInline(jobId);
+    }
+  }
+
+  private runFaceSwapJobInline(jobId: string): void {
+    void this.processFaceSwapJob(jobId).catch((error) => {
+      console.error(`[GenerationService] Inline face swap job ${jobId} failed:`, error);
+    });
+  }
+
+  private async claimQueuedFaceSwapJob(jobId: string): Promise<GenerationJob | null> {
+    const genJob = await this.prisma.generationJob.findUnique({ where: { id: jobId } });
+    if (!genJob || genJob.jobType !== 'faceswap-image' || genJob.status !== 'queued') {
+      return null;
+    }
+
+    const claimed = await this.prisma.generationJob.updateMany({
+      where: { id: jobId, status: 'queued' },
+      data: { status: 'running', startedAt: new Date(), errorMessage: null, failedAt: null },
+    });
+
+    if (claimed.count === 0) {
+      return null;
+    }
+
+    return genJob;
+  }
+
+  async processFaceSwapJob(jobId: string): Promise<void> {
+    const genJob = await this.claimQueuedFaceSwapJob(jobId);
+    if (!genJob) return;
+
+    let savedOutputs: SavedJobOutput[] = [];
+
+    try {
+      const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
+      const adapter = createFaceSwapAdapter(
+        genJob.provider,
+        this.getImageProviderApiKey(genJob.provider),
+      );
+
+      const createdJob = await adapter.createJob({
+        sourceFaceUrl: settings.sourceFaceUrl as string,
+        targetImageUrl: settings.targetImageUrl as string,
+      });
+
+      const resolvedJob = await this.resolveFaceSwapJob(
+        adapter,
+        createdJob.externalJobId,
+        createdJob.status,
+      );
+
+      if (resolvedJob.status === 'failed') {
+        throw new Error(resolvedJob.errorMessage || 'Face swap failed');
+      }
+
+      if (!resolvedJob.outputs?.length) {
+        throw new Error('Face swap completed without any outputs');
+      }
+
+      savedOutputs = await this.saveOutputsToStorage(
+        jobId,
+        genJob.userId,
+        resolvedJob.outputs,
+        'png',
+      );
+
+      await this.prisma.$transaction(async (tx) => {
+        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
+        await tx.generationJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'completed',
+            externalJobId: createdJob.externalJobId,
+            finalCredits: genJob.reservedCredits,
+            completedAt: new Date(),
+          },
+        });
+      });
+    } catch (error) {
+      await this.cleanupSavedOutputs(savedOutputs);
+      await this.failJob(
+        jobId,
+        genJob.userId,
+        genJob.reservedCredits,
+        error instanceof Error ? error.message : 'Unknown error',
+        `Refund for failed face swap job ${jobId}`,
+      );
+    }
+  }
+
+  private async resolveFaceSwapJob(
+    adapter: ReturnType<typeof createFaceSwapAdapter>,
+    externalJobId: string,
+    initialStatus: 'queued' | 'running' | 'completed',
+  ): Promise<{
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    outputs?: Array<{ url: string; mimeType: string }>;
+    errorMessage?: string;
+  }> {
+    let jobResult =
+      initialStatus === 'completed'
+        ? await adapter.getJob(externalJobId)
+        : { status: initialStatus, outputs: undefined };
+
+    if (jobResult.status === 'completed' || jobResult.status === 'failed') {
+      return jobResult;
+    }
+
+    for (let attempts = 0; attempts < 60; attempts++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      jobResult = await adapter.getJob(externalJobId);
+      if (jobResult.status === 'completed' || jobResult.status === 'failed') {
+        return jobResult;
+      }
+    }
+
+    return {
+      status: 'failed',
+      errorMessage: 'Timed out waiting for face swap to complete',
+    };
   }
 
   private async getBalance(
@@ -335,6 +543,13 @@ export class GenerationService {
         console.warn(`[GenerationService] Rescuing stalled video job ${jobId}.`);
         await this.dispatchVideoJob(jobId);
         return;
+      case 'faceswap-image':
+        if (Date.now() - job.createdAt.getTime() < QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS) {
+          return;
+        }
+        console.warn(`[GenerationService] Rescuing stalled face swap job ${jobId}.`);
+        await this.dispatchFaceSwapJob(jobId);
+        return;
       default:
         await this.failUnsupportedQueuedJob(job.id, job.userId, job.reservedCredits, job.jobType);
     }
@@ -370,6 +585,9 @@ export class GenerationService {
         return;
       case 'video':
         await this.dispatchVideoJob(jobId);
+        return;
+      case 'faceswap-image':
+        await this.dispatchFaceSwapJob(jobId);
         return;
       default:
         await this.failUnsupportedQueuedJob(job.id, job.userId, job.reservedCredits, job.jobType);

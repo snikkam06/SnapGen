@@ -30,7 +30,6 @@ const plans = [
             'All style packs',
             'Video generation',
             'Face swap',
-            'Image upscaling',
         ],
     },
     {
@@ -46,7 +45,6 @@ const plans = [
             'All style packs',
             'Video generation',
             'Face swap',
-            'Image upscaling',
             'Priority queue',
         ],
     },
@@ -63,7 +61,6 @@ const plans = [
             'All style packs',
             'Video generation',
             'Face swap',
-            'Image upscaling',
             'Priority queue',
             'API access',
             'White-label options',

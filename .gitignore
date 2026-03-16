@@ -10,3 +10,7 @@ dist
 .DS_Store
 coverage
 uploads
+.local
+.codex-logs
+.playwright-cli
+output
