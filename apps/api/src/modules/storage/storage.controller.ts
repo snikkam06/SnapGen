@@ -73,14 +73,16 @@ export class StorageController {
         validateStoragePath(bucket, key);
 
         const chunks: Buffer[] = [];
+        const requestStream = req as Request & AsyncIterable<Buffer | string>;
         let totalSize = 0;
-        for await (const chunk of req as any) {
-            totalSize += chunk.length;
+        for await (const chunk of requestStream) {
+            const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalSize += bufferChunk.length;
             if (totalSize > MAX_UPLOAD_SIZE) {
                 res.status(413).json({ message: 'File too large (max 50MB)' });
                 return;
             }
-            chunks.push(Buffer.from(chunk));
+            chunks.push(bufferChunk);
         }
         const buffer = Buffer.concat(chunks);
         await this.storageService.saveFileLocally(bucket, key, buffer);

@@ -28,7 +28,6 @@ export default function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ['jobs', token, filter],
     enabled: !!token,
-    refetchInterval: 5000,
     queryFn: () =>
       api.getJobs(token as string, filter === 'all' ? undefined : { status: filter }) as Promise<
         Job[]

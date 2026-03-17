@@ -171,7 +171,7 @@ function VideoPageContent() {
         setJobTimedOut(true);
         return false;
       }
-      return 4000;
+      return 30000; // Fallback polling; SSE provides real-time updates
     },
     queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
   });

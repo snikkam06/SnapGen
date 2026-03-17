@@ -1,9 +1,7 @@
-import dotenv from 'dotenv';
-import path from 'node:path';
 import net from 'node:net';
+import { loadApiEnv } from './env/load-env';
 
-// Load .env from the monorepo root
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+loadApiEnv();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';

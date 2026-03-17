@@ -1,7 +1,10 @@
 import { Controller, Get, UseGuards, Res, Req } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
 import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
+import { PrismaService } from '../../prisma/prisma.service';
+import { JobEventsService } from './job-events.service';
 import { Response, Request } from 'express';
 
 @ApiTags('events')
@@ -9,7 +12,13 @@ import { Response, Request } from 'express';
 @UseGuards(ClerkAuthGuard)
 @ApiBearerAuth()
 export class EventsController {
+    constructor(
+        private prisma: PrismaService,
+        private jobEvents: JobEventsService,
+    ) {}
+
     @Get('jobs/stream')
+    @SkipThrottle()
     @ApiOperation({ summary: 'SSE stream for job progress updates' })
     async streamJobUpdates(
         @CurrentUser() user: AuthUser,
@@ -21,17 +30,30 @@ export class EventsController {
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
 
-        // Send initial heartbeat
+        const dbUser = await this.prisma.user.findUnique({
+            where: { clerkUserId: user.clerkUserId },
+            select: { id: true },
+        });
+
+        if (!dbUser) {
+            res.write(`data: ${JSON.stringify({ type: 'error', message: 'User not found' })}\n\n`);
+            res.end();
+            return;
+        }
+
         res.write(`data: ${JSON.stringify({ type: 'connected', userId: user.clerkUserId })}\n\n`);
 
-        // Heartbeat every 30 seconds
         const heartbeat = setInterval(() => {
             res.write(`data: ${JSON.stringify({ type: 'heartbeat', timestamp: Date.now() })}\n\n`);
         }, 30000);
 
-        // Clean up on disconnect
+        const unsubscribe = await this.jobEvents.subscribeToUserEvents(dbUser.id, (event) => {
+            res.write(`event: job.updated\ndata: ${JSON.stringify(event)}\n\n`);
+        });
+
         req.on('close', () => {
             clearInterval(heartbeat);
+            void unsubscribe();
             res.end();
         });
     }

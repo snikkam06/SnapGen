@@ -52,7 +52,7 @@ export default function FaceSwapPage() {
         enabled: !!token && !!activeJobId,
         refetchInterval: (query) => {
             const status = (query.state.data as JobDetail | undefined)?.status;
-            return status === 'completed' || status === 'failed' ? false : 4000;
+            return status === 'completed' || status === 'failed' ? false : 30000; // Fallback polling; SSE provides real-time updates
         },
         queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
     });

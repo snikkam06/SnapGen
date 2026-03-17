@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Asset, Prisma } from '@prisma/client';
 import { STORAGE_BUCKETS, UPLOAD_LIMITS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -44,7 +44,7 @@ type AssetWithContext = Prisma.AssetGetPayload<{
   };
 }>;
 
-type AssetForSerialization = Prisma.AssetGetPayload<{}> & {
+type AssetForSerialization = Asset & {
   jobAssets?: AssetWithContext['jobAssets'];
 };
 

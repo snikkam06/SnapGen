@@ -1,5 +1,7 @@
 import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { RATE_LIMITS } from '@snapgen/config';
 import { GenerationService } from './generation.service';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
 import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
@@ -8,6 +10,7 @@ import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
 @Controller('v1/generations')
 @UseGuards(ClerkAuthGuard)
 @ApiBearerAuth()
+@Throttle({ default: { ttl: RATE_LIMITS.generation.ttl * 1000, limit: RATE_LIMITS.generation.limit } })
 export class GenerationController {
   constructor(private generationService: GenerationService) {}
 

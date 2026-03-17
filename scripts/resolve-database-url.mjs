@@ -9,7 +9,18 @@ if (process.env.DATABASE_URL) {
     process.exit(0);
 }
 
-const envPath = path.join(repoRoot, '.env');
+const envPathCandidates = [
+    path.join(repoRoot, '.env'),
+    path.join(repoRoot, 'apps/api/.env'),
+];
+const envPath = envPathCandidates.find((candidatePath) => fs.existsSync(candidatePath));
+
+if (!envPath) {
+    throw new Error(
+        `DATABASE_URL env file not found. Checked: ${envPathCandidates.join(', ')}`,
+    );
+}
+
 const envContents = fs.readFileSync(envPath, 'utf8');
 const databaseUrlLine = envContents
     .split(/\r?\n/)
@@ -20,6 +31,9 @@ if (!databaseUrlLine) {
 }
 
 const databaseUrl = databaseUrlLine.slice('DATABASE_URL='.length);
+if (!databaseUrl.trim()) {
+    throw new Error(`DATABASE_URL is empty in ${envPath}`);
+}
 const parsed = new URL(databaseUrl);
 const localClusterPath = path.join(repoRoot, '.local/postgres/PG_VERSION');
 
