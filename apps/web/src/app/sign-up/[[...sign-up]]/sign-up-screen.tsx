@@ -71,10 +71,10 @@ export function SignUpScreen() {
 
       <div className="w-full max-w-lg text-center">
         <p className="mb-4 text-sm font-medium uppercase tracking-[0.32em] text-purple-200/90">
-          SnapGen
+          mysfw.ai
         </p>
         <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.55rem]">
-          Create your SnapGen account
+          Create your mysfw.ai account
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-white/68">
           Start training characters and generating content in minutes.

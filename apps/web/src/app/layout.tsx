@@ -10,7 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'SnapGen — AI Image & Video Generation Platform',
+  title: 'mysfw.ai — AI Image & Video Generation Platform',
   description:
     'Create stunning AI-generated images and videos with custom characters. Train models, generate content, and build your AI influencer portfolio.',
   keywords: [
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     'video generation',
   ],
   openGraph: {
-    title: 'SnapGen — AI Image & Video Generation Platform',
+    title: 'mysfw.ai — AI Image & Video Generation Platform',
     description: 'Create stunning AI-generated images and videos with custom characters.',
     type: 'website',
   },

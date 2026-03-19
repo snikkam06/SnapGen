@@ -78,7 +78,7 @@ export function AuthStatusCard({ mode, state }: AuthStatusCardProps) {
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-purple-300" />
         <h2 className="mt-4 text-lg font-semibold text-white">{heading}</h2>
         <p className="mt-2 text-sm text-white/60">
-          SnapGen is waiting for Clerk to finish loading in your browser.
+          mysfw.ai is waiting for Clerk to finish loading in your browser.
         </p>
 
         {showRecoveryActions ? (

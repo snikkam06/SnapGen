@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react';
 const sections = [
   {
     title: 'Information We Collect',
-    body: 'SnapGen stores account details, uploaded training assets, prompts, generated media, billing events, and operational logs needed to run the service, prevent abuse, and support your workspace.',
+    body: 'mysfw.ai stores account details, uploaded training assets, prompts, generated media, billing events, and operational logs needed to run the service, prevent abuse, and support your workspace.',
   },
   {
     title: 'How We Use Data',
@@ -29,7 +29,7 @@ export default function PrivacyPage() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-pink-500">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
-            <span className="text-xl font-bold gradient-text">SnapGen</span>
+            <span className="text-xl font-bold gradient-text">mysfw.ai</span>
           </Link>
           <Link href="/pricing" className="btn-ghost">
             Pricing
@@ -40,9 +40,9 @@ export default function PrivacyPage() {
       <main className="mx-auto max-w-4xl px-6 py-20">
         <div className="mb-12">
           <p className="mb-3 text-sm uppercase tracking-[0.24em] text-purple-300">Privacy Policy</p>
-          <h1 className="mb-4 text-4xl font-bold md:text-5xl">How SnapGen handles your data</h1>
+          <h1 className="mb-4 text-4xl font-bold md:text-5xl">How mysfw.ai handles your data</h1>
           <p className="max-w-2xl text-white/50">
-            This page summarizes the information SnapGen collects, why it is used, and the controls
+            This page summarizes the information mysfw.ai collects, why it is used, and the controls
             available to account owners.
           </p>
         </div>

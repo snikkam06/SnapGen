@@ -250,9 +250,9 @@ export function SignInScreen({ redirectUrl }: SignInScreenProps) {
       </div>
 
       <div className="w-full max-w-md text-center">
-        <p className="mb-3 text-sm uppercase tracking-[0.24em] text-purple-300">SnapGen</p>
+        <p className="mb-3 text-sm uppercase tracking-[0.24em] text-purple-300">mysfw.ai</p>
         <h1 className="text-3xl font-bold">
-          {step === 'credentials' ? 'Sign in to SnapGen' : 'Verify your device'}
+          {step === 'credentials' ? 'Sign in to mysfw.ai' : 'Verify your device'}
         </h1>
         <p className="mt-3 text-white/50">
           {step === 'credentials'

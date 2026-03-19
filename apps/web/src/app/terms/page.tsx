@@ -3,8 +3,8 @@ import { Sparkles } from 'lucide-react';
 
 const sections = [
   {
-    title: 'Using SnapGen',
-    body: 'You are responsible for the prompts, uploads, and outputs you create in SnapGen. Do not upload content you do not have the right to use, and do not use the service to generate unlawful, deceptive, or abusive material.',
+    title: 'Using mysfw.ai',
+    body: 'You are responsible for the prompts, uploads, and outputs you create in mysfw.ai. Do not upload content you do not have the right to use, and do not use the service to generate unlawful, deceptive, or abusive material.',
   },
   {
     title: 'Accounts and Billing',
@@ -29,7 +29,7 @@ export default function TermsPage() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-pink-500">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
-            <span className="text-xl font-bold gradient-text">SnapGen</span>
+            <span className="text-xl font-bold gradient-text">mysfw.ai</span>
           </Link>
           <Link href="/pricing" className="btn-ghost">
             Pricing
@@ -42,7 +42,7 @@ export default function TermsPage() {
           <p className="mb-3 text-sm uppercase tracking-[0.24em] text-purple-300">
             Terms of Service
           </p>
-          <h1 className="mb-4 text-4xl font-bold md:text-5xl">Terms for using SnapGen</h1>
+          <h1 className="mb-4 text-4xl font-bold md:text-5xl">Terms for using mysfw.ai</h1>
           <p className="max-w-2xl text-white/50">
             These terms describe the basic rules for accessing the platform, buying credits, and
             using generated outputs responsibly.

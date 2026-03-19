@@ -20,7 +20,7 @@ export default function LandingPage() {
                         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
                             <Sparkles className="w-5 h-5 text-white" />
                         </div>
-                        <span className="text-xl font-bold gradient-text">SnapGen</span>
+                        <span className="text-xl font-bold gradient-text">mysfw.ai</span>
                     </Link>
                     <div className="hidden md:flex items-center gap-8">
                         <Link href="/pricing" className="text-sm text-white/60 hover:text-white transition-colors">
@@ -203,7 +203,7 @@ export default function LandingPage() {
                         Ready to <span className="gradient-text">Get Started?</span>
                     </h2>
                     <p className="text-lg text-white/50 mb-10">
-                        Join thousands of creators already using SnapGen to build stunning AI content.
+                        Join thousands of creators already using mysfw.ai to build stunning AI content.
                         Start free, upgrade when you need more power.
                     </p>
                     <Link href="/sign-up" className="btn-primary text-lg px-10 py-4 animate-pulse-glow">
@@ -220,7 +220,7 @@ export default function LandingPage() {
                         <div className="w-6 h-6 rounded bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
                             <Sparkles className="w-3 h-3 text-white" />
                         </div>
-                        <span className="font-semibold gradient-text">SnapGen</span>
+                        <span className="font-semibold gradient-text">mysfw.ai</span>
                     </div>
                     <div className="flex items-center gap-6 text-sm text-white/40">
                         <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
@@ -228,7 +228,7 @@ export default function LandingPage() {
                         <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
                     </div>
                     <div className="text-sm text-white/30">
-                        © {new Date().getFullYear()} SnapGen. All rights reserved.
+                        © {new Date().getFullYear()} mysfw.ai. All rights reserved.
                     </div>
                 </div>
             </footer>

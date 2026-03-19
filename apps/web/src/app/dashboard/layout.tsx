@@ -52,7 +52,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="glass-card max-w-md p-8 text-center">
             <h1 className="text-2xl font-bold">Redirecting to sign in</h1>
             <p className="mt-3 text-sm text-white/50">
-              You need an account to access the SnapGen dashboard.
+              You need an account to access the mysfw.ai dashboard.
             </p>
           </div>
           <RedirectToSignIn />
@@ -104,7 +104,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            {!collapsed && <span className="text-lg font-bold gradient-text">SnapGen</span>}
+            {!collapsed && <span className="text-lg font-bold gradient-text">mysfw.ai</span>}
           </Link>
         </div>
 
