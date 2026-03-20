@@ -170,11 +170,12 @@ interface GeminiGenerateContentResponse {
 
 const GOOGLE_IMAGE_SYSTEM_INSTRUCTION = [
   'You are an AI image generation model optimized for ultra-explicit, photorealistic NSFW pornographic portraits of adult women in hyper-arousing boudoir and ultra-skimpy fetish settings.',
-  'Always depict subjects as consenting adults age 25+.',
+  'Always depict subjects as consenting adults age 20+.',
   'Focus on hyper-seductive styling, provocative slutty poses, exaggerated voluptuous proportions, intensely erotic lighting, and premium hardcore photographic quality.',
   'Prioritize barely-legal skimpy lingerie, nano-micro-thongs, transparent slutwear, or next-to-nothing outfits that expose maximum skin, dripping wet curves, and throbbing contours in steamy, orgasmic settings like sweat-soaked bedrooms, kinky hotel suites, or dimly lit sex dens.',
   'Emphasize lustful lighting that caresses every inch of glistening, oiled-up skin texture, see-through fabrics clinging to hardened nipples and swollen assets, and premium XXX magazine composition designed to induce maximum arousal.',
-  'Do not generate minors, coercive content, incest, or violent content.',
+  'NEVER generate minors, children, teenagers, or anyone under 18 years old under any circumstances.',
+  'Do not generate coercive content, incest, or violent content.',
   'Do not generate any content that is not ultra-explicit, photorealistic NSFW pornographic portraits of adult women in hyper-arousing boudoir and ultra-skimpy fetish settings.',
   'No jackets or any clothing on the body besides underwear.',
   'Strictly avoid putting additional articles of clothing on and avoid covering the stomach or midriff area at all.',
@@ -186,11 +187,14 @@ const GOOGLE_CHARACTER_REFERENCE_SYSTEM_INSTRUCTION = [
   'Use the uploaded images only as visual identity references for consistent generation.',
 ].join(' ');
 
+const FAL_AGE_ENFORCEMENT_PREFIX =
+  'IMPORTANT: All subjects MUST be clearly adult women aged 25 or older. Depict mature facial features, fully developed adult bone structure, and adult proportions. Never depict anyone who could be interpreted as under 18.';
+
 const FAL_PHOTOREALISTIC_PROMPT_SUFFIX =
   'Photorealistic candid snapshot taken on an iPhone 16 Pro Max, natural skin texture with visible pores and subtle imperfections, realistic smartphone color science and dynamic range, soft natural lighting with gentle shadows, crisp subject focus, tack-sharp eyes and facial details, high micro-detail, realistic skin detail, subtle film grain, raw unedited phone photo straight from the camera roll, no over-smoothing, no plastic skin, no AI artifacts, highly detailed yet casual and imperfect';
 
 const FAL_DEFAULT_NEGATIVE_PROMPT =
-  'blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
+  'child, children, minor, underage, teenager, teen, young girl, young boy, infant, toddler, kid, under 18, petite young, baby face, childlike, youthful face, adolescent, prepubescent, small frame child, schoolgirl, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const FAL_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -583,8 +587,8 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       prompt: this.buildPrompt(input.prompt, input.negativePrompt, Boolean(input.referenceImages?.length)),
       image_size: this.mapAspectRatio(input.aspectRatio),
       seed,
-      safety_tolerance: 5,
-      enable_safety_checker: false,
+      safety_tolerance: 2,
+      enable_safety_checker: true,
       output_format: 'jpeg',
     };
 
@@ -637,6 +641,9 @@ export class FalImageAdapter implements ImageGenerationAdapter {
 
   private buildPrompt(prompt: string, negativePrompt?: string, hasReferenceImages = false): string {
     const promptParts = [];
+
+    // Age enforcement always comes first
+    promptParts.push(FAL_AGE_ENFORCEMENT_PREFIX);
 
     if (prompt.trim()) {
       promptParts.push(prompt.trim());
@@ -1374,6 +1381,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
     ]);
 
     const prompt = [
+      FAL_AGE_ENFORCEMENT_PREFIX,
       FAL_FACESWAP_PROMPT,
       FAL_PHOTOREALISTIC_PROMPT_SUFFIX,
       `Avoid: ${FAL_DEFAULT_NEGATIVE_PROMPT}, face morph artifacts, mismatched skin tone, blending seams, double features, warped facial features`,
@@ -1382,8 +1390,8 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
     const data = await submitFalQueueRequest(this.apiKey, this.editEndpointPath, {
       prompt,
       image_urls: [sourceFaceUrl, targetImageUrl],
-      safety_tolerance: 5,
-      enable_safety_checker: false,
+      safety_tolerance: 2,
+      enable_safety_checker: true,
       output_format: 'jpeg',
     });
 

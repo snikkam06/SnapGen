@@ -1,4 +1,18 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '/api';
+function getApiBaseUrl() {
+    if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+        return process.env.NEXT_PUBLIC_API_BASE_URL;
+    }
+    // Server-side: use absolute URL to the backend directly
+    if (typeof window === 'undefined') {
+        return process.env.API_SERVER_URL
+            ? `${process.env.API_SERVER_URL}/api`
+            : 'http://localhost:3001/api';
+    }
+    // Client-side: use relative URL (proxied by Next.js rewrites)
+    return '/api';
+}
+
+const API_BASE_URL = getApiBaseUrl();
 
 interface FetchOptions extends RequestInit {
     token?: string;

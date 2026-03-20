@@ -18,6 +18,23 @@ import { assertNonEmptyString, assertOptionalUuid } from '../../utils/validation
 
 const QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS = 15_000;
 const QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS = 15_000;
+
+const MINOR_BLOCKLIST_PATTERNS = [
+  /\b(?:child|children|kid|kids|infant|toddler|baby)\b/i,
+  /\b(?:underage|under.?age|under.?18|pre.?teen|preteen)\b/i,
+  /\b(?:minor|minors)\b/i,
+  /\b(?:loli|lolita|shota)\b/i,
+  /\b(?:school.?girl|school.?boy)\b/i,
+  /\b(?:young\s+(?:girl|boy|teen|child))\b/i,
+  /\b(?:little\s+(?:girl|boy))\b/i,
+  /\b(?:teen\s*(?:age|aged)?(?:\s+(?:girl|boy))?)\b/i,
+  /\b(?:adolescent)\b/i,
+  /\b(?:prepubescent|pubescent)\b/i,
+];
+
+function containsMinorTerms(prompt: string): boolean {
+  return MINOR_BLOCKLIST_PATTERNS.some((pattern) => pattern.test(prompt));
+}
 type ImageGenerationMode = 'base' | 'enhanced';
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 type SavedJobOutput = {
@@ -57,6 +74,10 @@ export class GenerationService {
     const sourceAssetId = assertOptionalUuid(data.sourceAssetId, 'sourceAssetId');
     const prompt = assertNonEmptyString(data.prompt, 'prompt');
     const negativePrompt = data.negativePrompt?.trim() || null;
+
+    if (containsMinorTerms(prompt)) {
+      throw new BadRequestException('Prompt rejected: content referencing minors is not allowed.');
+    }
 
     const characterContext = await this.getCharacterGenerationContext(user.id, characterId);
     const stylePack = await this.getActiveStylePack(stylePackId);
@@ -161,6 +182,10 @@ export class GenerationService {
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const sourceAssetId = assertOptionalUuid(data.sourceAssetId, 'sourceAssetId');
     const prompt = assertNonEmptyString(data.prompt, 'prompt');
+
+    if (containsMinorTerms(prompt)) {
+      throw new BadRequestException('Prompt rejected: content referencing minors is not allowed.');
+    }
 
     await this.assertCharacterExists(user.id, characterId);
 
