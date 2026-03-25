@@ -33,6 +33,7 @@ async function isRedisReachable(redisUrl?: string): Promise<boolean> {
 async function bootstrap() {
     if (!(await isRedisReachable(process.env.REDIS_URL))) {
         process.env.SNAPGEN_DISABLE_QUEUE = 'true';
+        process.env.SNAPGEN_INLINE_PROCESSING = 'true';
         console.warn('Redis is unavailable. Running API with inline media processing.');
     }
 
@@ -93,7 +94,9 @@ async function bootstrap() {
     const port = process.env.PORT || 3001;
     await app.listen(port);
     console.log(`🚀 SnapGen API running on http://localhost:${port}/api`);
-    console.log(`📚 Swagger docs at http://localhost:${port}/api/docs`);
+    if (process.env.NODE_ENV !== 'production') {
+        console.log(`📚 Swagger docs at http://localhost:${port}/api/docs`);
+    }
 }
 
 bootstrap();

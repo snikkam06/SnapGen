@@ -13,4 +13,5 @@ uploads
 .local
 .codex-logs
 .playwright-cli
+.playwright-mcp
 output

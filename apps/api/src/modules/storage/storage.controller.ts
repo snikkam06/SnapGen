@@ -1,4 +1,15 @@
-import { Controller, Get, Put, Query, Req, Res, NotFoundException, BadRequestException, UseGuards } from '@nestjs/common';
+import {
+    Controller,
+    Get,
+    Put,
+    Query,
+    Req,
+    Res,
+    NotFoundException,
+    BadRequestException,
+    UnauthorizedException,
+    UseGuards,
+} from '@nestjs/common';
 import { Response, Request } from 'express';
 import { StorageService } from './storage.service';
 import { ClerkAuthGuard } from '../../guards/clerk-auth.guard';
@@ -22,7 +33,6 @@ function validateStoragePath(bucket: string, key: string): void {
 }
 
 @Controller('v1/storage')
-@UseGuards(ClerkAuthGuard)
 export class StorageController {
     constructor(private storageService: StorageService) {}
 
@@ -30,6 +40,8 @@ export class StorageController {
     async serveFile(
         @Query('bucket') bucket: string,
         @Query('key') key: string,
+        @Query('expires') expires: string | undefined,
+        @Query('sig') sig: string | undefined,
         @Res() res: Response,
     ) {
         if (!bucket || !key) {
@@ -37,6 +49,10 @@ export class StorageController {
         }
 
         validateStoragePath(bucket, key);
+
+        if (!this.storageService.verifyLocalFileSignature(bucket, key, expires, sig)) {
+            throw new UnauthorizedException('Invalid or expired file URL');
+        }
 
         try {
             const buffer = await this.storageService.getLocalFileBuffer(bucket, key);
@@ -52,6 +68,7 @@ export class StorageController {
             };
             res.set('Content-Type', contentTypeMap[ext] || 'application/octet-stream');
             res.set('Cache-Control', 'public, max-age=3600');
+            res.set('Cross-Origin-Resource-Policy', 'cross-origin');
             res.send(buffer);
         } catch {
             throw new NotFoundException('File not found');
@@ -59,6 +76,7 @@ export class StorageController {
     }
 
     @Put('upload')
+    @UseGuards(ClerkAuthGuard)
     async uploadFile(
         @Query('bucket') bucket: string,
         @Query('key') key: string,

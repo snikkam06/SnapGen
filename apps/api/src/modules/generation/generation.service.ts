@@ -19,6 +19,9 @@ import { JobEventsService, JobEvent } from '../events/job-events.service';
 import { assertNonEmptyString, assertOptionalUuid } from '../../utils/validation';
 
 const INLINE_PROCESSING_ENABLED = process.env.SNAPGEN_INLINE_PROCESSING === 'true';
+const MAX_PENDING_JOBS_PER_USER = Number(process.env.MAX_PENDING_JOBS_PER_USER) || 5;
+const QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS = 15_000;
+const QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS = 15_000;
 type ImageGenerationMode = 'base' | 'enhanced';
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 type SavedJobOutput = {
@@ -39,6 +42,9 @@ export class GenerationService {
     @Optional() @InjectQueue('image-generation') private imageQueue?: Queue,
     @Optional() @InjectQueue('video-generation') private videoQueue?: Queue,
     @Optional() @InjectQueue('faceswap-generation') private faceswapQueue?: Queue,
+    @Optional() @InjectQueue('image-poll') private imagePollQueue?: Queue,
+    @Optional() @InjectQueue('video-poll') private videoPollQueue?: Queue,
+    @Optional() @InjectQueue('faceswap-poll') private faceswapPollQueue?: Queue,
   ) {}
 
   async createImageJob(
@@ -55,6 +61,7 @@ export class GenerationService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const stylePackId = assertOptionalUuid(data.stylePackId, 'stylePackId');
@@ -97,6 +104,7 @@ export class GenerationService {
     };
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -163,6 +171,7 @@ export class GenerationService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const sourceAssetId = assertOptionalUuid(data.sourceAssetId, 'sourceAssetId');
@@ -179,6 +188,7 @@ export class GenerationService {
       : null;
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -240,6 +250,7 @@ export class GenerationService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const sourceAssetId = assertNonEmptyString(data.sourceAssetId, 'sourceAssetId');
     const targetAssetId = assertNonEmptyString(data.targetAssetId, 'targetAssetId');
@@ -255,6 +266,7 @@ export class GenerationService {
     const totalCost = CREDIT_COSTS['faceswap-image'];
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -316,28 +328,27 @@ export class GenerationService {
     return 'mock';
   }
 
-  private async dispatchFaceSwapJob(jobId: string, userId: string): Promise<void> {
+  private async dispatchFaceSwapJob(jobId: string, userId: string): Promise<boolean> {
     if (INLINE_PROCESSING_ENABLED && !this.faceswapQueue) {
-      void this.processFaceSwapJob(jobId).catch((error) => {
+      void this.processFaceSwapJob(jobId).catch(async (error) => {
         console.error(`[GenerationService] Inline face swap job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline face swap job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
       });
-      return;
+      return true;
     }
 
-    if (!this.faceswapQueue) {
-      await this.failJobAndThrow503(jobId, userId, 'faceswap');
-      return;
+    const queue = this.faceswapQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'faceswap');
     }
 
     try {
-      await this.faceswapQueue.add('faceswap-image', { jobId }, {
-        jobId: this.buildQueueJobId('faceswap', jobId),
-        removeOnComplete: 100,
-        removeOnFail: 500,
-      });
+      return await this.enqueueQueueJob(queue, 'faceswap', 'faceswap-image', jobId);
     } catch (error) {
       console.error(`[GenerationService] Failed to enqueue face swap job ${jobId}:`, error);
-      await this.failJobAndThrow503(jobId, userId, 'faceswap');
+      return this.failJobAndThrow503(jobId, userId, 'faceswap');
     }
   }
 
@@ -398,9 +409,9 @@ export class GenerationService {
         'png',
       );
 
-      await this.prisma.$transaction(async (tx) => {
+      const completedJob = await this.prisma.$transaction(async (tx) => {
         await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        await tx.generationJob.update({
+        return tx.generationJob.update({
           where: { id: jobId },
           data: {
             status: 'completed',
@@ -410,12 +421,12 @@ export class GenerationService {
           },
         });
       });
+      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed face swap job ${jobId}`,
       );
@@ -465,6 +476,25 @@ export class GenerationService {
     return result._sum.amount || 0;
   }
 
+  private async assertPendingJobLimit(userId: string): Promise<void> {
+    const count = await this.prisma.generationJob.count({
+      where: { userId, status: { in: ['queued', 'running'] } },
+    });
+    if (count >= MAX_PENDING_JOBS_PER_USER) {
+      throw new BadRequestException(
+        `You have ${count} pending jobs. Wait for some to finish before submitting more.`,
+      );
+    }
+  }
+
+  private async lockUserCredits(
+    client: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    // Match the webhook locking pattern and avoid integer-width mismatches in Prisma bindings.
+    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
+  }
+
   private getDefaultImageProvider(): string {
     if (process.env.IMAGE_PROVIDER) {
       return process.env.IMAGE_PROVIDER;
@@ -495,26 +525,112 @@ export class GenerationService {
 
   private resolveImageProvider(mode?: ImageGenerationMode): string {
     if (mode === 'base') {
-      return 'fal';
+      if (process.env.FAL_API_KEY) {
+        return 'fal';
+      }
+      if (process.env.IMAGE_PROVIDER) {
+        return process.env.IMAGE_PROVIDER;
+      }
+      return this.getDefaultImageProvider();
     }
 
     if (mode === 'enhanced') {
-      return 'google';
+      if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+        return 'google';
+      }
+      if (process.env.IMAGE_PROVIDER) {
+        return process.env.IMAGE_PROVIDER;
+      }
+      return this.getDefaultImageProvider();
+    }
+
+    if (process.env.IMAGE_PROVIDER) {
+      return process.env.IMAGE_PROVIDER;
     }
 
     return this.getDefaultImageProvider();
   }
 
   private normalizeImageCount(requestedCount: number | undefined, provider: string): number {
-    const normalizedCount = Number.isFinite(requestedCount)
-      ? Math.trunc(requestedCount as number)
-      : 4;
     const maxImages = provider === 'google' || provider === 'gemini' ? 4 : 8;
 
-    return Math.max(1, Math.min(normalizedCount, maxImages));
+    if (requestedCount === undefined || requestedCount === null) {
+      return 4;
+    }
+
+    if (!Number.isFinite(requestedCount)) {
+      throw new BadRequestException(`numImages must be a finite number`);
+    }
+
+    const count = Math.trunc(requestedCount);
+    if (count < 1) {
+      throw new BadRequestException(
+        `numImages must be at least 1, got ${requestedCount}`,
+      );
+    }
+    if (count > maxImages) {
+      throw new BadRequestException(
+        `numImages must be at most ${maxImages} for provider "${provider}", got ${requestedCount}`,
+      );
+    }
+
+    return count;
   }
 
-  async dispatchQueuedJob(jobId: string): Promise<void> {
+  async ensureJobProcessing(jobId: string): Promise<void> {
+    const job = await this.prisma.generationJob.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        jobType: true,
+        status: true,
+        createdAt: true,
+        userId: true,
+        reservedCredits: true,
+      },
+    });
+
+    if (!job || job.status !== 'queued') {
+      return;
+    }
+
+    const thresholdMs =
+      job.jobType === 'video'
+        ? QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS
+        : QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS;
+    if (Date.now() - job.createdAt.getTime() < thresholdMs) {
+      return;
+    }
+
+    if (!(await this.canRescueQueuedJob(job.jobType))) {
+      return;
+    }
+
+    try {
+      const rescued = await this.dispatchQueuedJob(jobId);
+      if (!rescued) {
+        return;
+      }
+
+      switch (job.jobType) {
+        case 'image':
+          console.warn(`[GenerationService] Rescuing stalled image job ${jobId}.`);
+          return;
+        case 'video':
+          console.warn(`[GenerationService] Rescuing stalled video job ${jobId}.`);
+          return;
+        case 'faceswap-image':
+          console.warn(`[GenerationService] Rescuing stalled face swap job ${jobId}.`);
+          return;
+        default:
+          await this.failUnsupportedQueuedJob(job.id, job.userId, job.jobType);
+      }
+    } catch (error) {
+      console.warn(`[GenerationService] Failed to rescue queued job ${jobId}.`, error);
+    }
+  }
+
+  async dispatchQueuedJob(jobId: string): Promise<boolean> {
     const job = await this.prisma.generationJob.findUnique({
       where: { id: jobId },
       select: {
@@ -527,71 +643,84 @@ export class GenerationService {
     });
 
     if (!job || job.status !== 'queued') {
-      return;
+      return false;
     }
 
     switch (job.jobType) {
       case 'image':
-        await this.dispatchImageJob(jobId, job.userId);
-        return;
+        return this.dispatchImageJob(jobId, job.userId);
       case 'video':
-        await this.dispatchVideoJob(jobId, job.userId);
-        return;
+        return this.dispatchVideoJob(jobId, job.userId);
       case 'faceswap-image':
-        await this.dispatchFaceSwapJob(jobId, job.userId);
-        return;
+        return this.dispatchFaceSwapJob(jobId, job.userId);
       default:
-        await this.failUnsupportedQueuedJob(job.id, job.userId, job.reservedCredits, job.jobType);
+        await this.failUnsupportedQueuedJob(job.id, job.userId, job.jobType);
+        return false;
     }
   }
 
-  private async dispatchImageJob(jobId: string, userId: string): Promise<void> {
+  private async dispatchImageJob(jobId: string, userId: string): Promise<boolean> {
     if (INLINE_PROCESSING_ENABLED && !this.imageQueue) {
-      void this.processImageJob(jobId).catch((error) => {
+      void this.processImageJob(jobId).catch(async (error) => {
         console.error(`[GenerationService] Inline image job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline image job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
       });
-      return;
+      return true;
     }
 
-    if (!this.imageQueue) {
-      await this.failJobAndThrow503(jobId, userId, 'image');
-      return;
+    const queue = this.imageQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'image');
     }
 
     try {
-      await this.imageQueue.add('generate-image', { jobId }, {
-        jobId: this.buildQueueJobId('image', jobId),
-        removeOnComplete: 100,
-        removeOnFail: 500,
-      });
+      return await this.enqueueQueueJob(queue, 'image', 'generate-image', jobId);
     } catch (error) {
       console.error(`[GenerationService] Failed to enqueue image job ${jobId}:`, error);
-      await this.failJobAndThrow503(jobId, userId, 'image');
+      return this.failJobAndThrow503(jobId, userId, 'image');
     }
   }
 
-  private async dispatchVideoJob(jobId: string, userId: string): Promise<void> {
+  private async dispatchVideoJob(jobId: string, userId: string): Promise<boolean> {
     if (INLINE_PROCESSING_ENABLED && !this.videoQueue) {
-      void this.processVideoJob(jobId).catch((error) => {
+      void this.processVideoJob(jobId).catch(async (error) => {
         console.error(`[GenerationService] Inline video job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline video job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
       });
-      return;
+      return true;
     }
 
-    if (!this.videoQueue) {
-      await this.failJobAndThrow503(jobId, userId, 'video');
-      return;
+    const queue = this.videoQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'video');
     }
 
     try {
-      await this.videoQueue.add('generate-video', { jobId }, {
-        jobId: this.buildQueueJobId('video', jobId),
-        removeOnComplete: 100,
-        removeOnFail: 500,
-      });
+      return await this.enqueueQueueJob(queue, 'video', 'generate-video', jobId);
     } catch (error) {
       console.error(`[GenerationService] Failed to enqueue video job ${jobId}:`, error);
-      await this.failJobAndThrow503(jobId, userId, 'video');
+      return this.failJobAndThrow503(jobId, userId, 'video');
+    }
+  }
+
+  private async canRescueQueuedJob(jobType: string): Promise<boolean> {
+    if (INLINE_PROCESSING_ENABLED) {
+      return true;
+    }
+
+    switch (jobType) {
+      case 'image':
+        return this.queueHealth.isQueueHealthy('image');
+      case 'video':
+        return this.queueHealth.isQueueHealthy('video');
+      case 'faceswap-image':
+        return this.queueHealth.isQueueHealthy('faceswap');
+      default:
+        return true;
     }
   }
 
@@ -609,20 +738,68 @@ export class GenerationService {
     return `${queueName}-${jobId}`;
   }
 
-  private async failJobAndThrow503(jobId: string, userId: string, queueName: string): Promise<never> {
-    const job = await this.prisma.generationJob.findUnique({
-      where: { id: jobId },
-      select: { reservedCredits: true },
-    });
-    if (job) {
-      await this.failJob(
-        jobId,
-        userId,
-        job.reservedCredits,
-        `Queue unavailable: ${queueName}`,
-        `Refund for failed ${queueName} job ${jobId} (queue unavailable)`,
-      );
+  private async enqueueQueueJob(
+    queue: Queue,
+    queueName: 'image' | 'video' | 'faceswap',
+    queueJobName: string,
+    jobId: string,
+  ): Promise<boolean> {
+    const queueJobId = this.buildQueueJobId(queueName, jobId);
+    const isTerminalState = (state: string) => state === 'completed' || state === 'failed';
+
+    const removeTerminalJobIfPresent = async (): Promise<boolean> => {
+      const existingJob = await queue.getJob(queueJobId);
+      if (!existingJob) {
+        return false;
+      }
+
+      const state = await existingJob.getState();
+      if (!isTerminalState(state)) {
+        return true;
+      }
+
+      await existingJob.remove();
+      return false;
+    };
+
+    if (await removeTerminalJobIfPresent()) {
+      return false;
     }
+
+    let queueJob = await queue.add(queueJobName, { jobId }, {
+      jobId: queueJobId,
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    });
+    let state = await queueJob.getState();
+
+    // BullMQ deduplicates duplicate job IDs by returning the existing job, so
+    // retry once if we raced with a terminal queue entry.
+    if (isTerminalState(state)) {
+      await queueJob.remove();
+
+      if (await removeTerminalJobIfPresent()) {
+        return false;
+      }
+
+      queueJob = await queue.add(queueJobName, { jobId }, {
+        jobId: queueJobId,
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      });
+      state = await queueJob.getState();
+    }
+
+    return !isTerminalState(state);
+  }
+
+  private async failJobAndThrow503(jobId: string, userId: string, queueName: string): Promise<never> {
+    await this.failJob(
+      jobId,
+      userId,
+      `Queue unavailable: ${queueName}`,
+      `Refund for failed ${queueName} job ${jobId} (queue unavailable)`,
+    );
     throw new ServiceUnavailableException(
       'Generation service temporarily unavailable. Credits have been refunded. Please try again later.',
     );
@@ -730,9 +907,9 @@ export class GenerationService {
         'png',
       );
 
-      await this.prisma.$transaction(async (tx) => {
+      const completedJob = await this.prisma.$transaction(async (tx) => {
         await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        await tx.generationJob.update({
+        return tx.generationJob.update({
           where: { id: jobId },
           data: {
             status: 'completed',
@@ -742,12 +919,12 @@ export class GenerationService {
           },
         });
       });
+      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed job ${jobId}`,
       );
@@ -980,9 +1157,9 @@ export class GenerationService {
         'mp4',
       );
 
-      await this.prisma.$transaction(async (tx) => {
+      const completedJob = await this.prisma.$transaction(async (tx) => {
         await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-video', savedOutputs);
-        await tx.generationJob.update({
+        return tx.generationJob.update({
           where: { id: jobId },
           data: {
             status: 'completed',
@@ -992,12 +1169,12 @@ export class GenerationService {
           },
         });
       });
+      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed video job ${jobId}`,
       );
@@ -1007,26 +1184,29 @@ export class GenerationService {
   private async failJob(
     jobId: string,
     userId: string,
-    reservedCredits: number,
     errorMessage: string,
     refundReason: string,
   ): Promise<void> {
     const failedAt = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.generationJob.update({
-        where: { id: jobId },
-        data: {
-          status: 'failed',
-          errorMessage,
-          failedAt,
-        },
+
+    const updatedJob = await this.prisma.$transaction(async (tx) => {
+      // Atomic status guard: only one caller can transition to 'failed'
+      const result = await tx.generationJob.updateMany({
+        where: { id: jobId, status: { not: 'failed' } },
+        data: { status: 'failed', errorMessage, failedAt },
       });
 
-      if (reservedCredits > 0) {
+      if (result.count === 0) return null;
+
+      const job = await tx.generationJob.findUnique({
+        where: { id: jobId },
+      });
+
+      if (job && job.reservedCredits > 0) {
         await tx.creditLedger.create({
           data: {
             userId,
-            amount: reservedCredits,
+            amount: job.reservedCredits,
             entryType: 'job_refund',
             reason: refundReason,
             referenceType: 'job',
@@ -1034,16 +1214,38 @@ export class GenerationService {
           },
         });
       }
+
+      return job;
     });
 
-    // Fetch the updated job to publish event
-    const updatedJob = await this.prisma.generationJob.findUnique({ where: { id: jobId } });
     if (updatedJob) {
       await this.publishJobEvent(userId, updatedJob);
     }
   }
 
   private async publishJobEvent(userId: string, job: GenerationJob): Promise<void> {
+    let outputs: Array<{ id: string; url: string; mimeType: string }> | undefined;
+
+    if (job.status === 'completed') {
+      try {
+        const jobAssets = await this.prisma.jobAsset.findMany({
+          where: { jobId: job.id, relation: 'output' },
+          include: { asset: true },
+        });
+        if (jobAssets.length > 0) {
+          outputs = await Promise.all(
+            jobAssets.map(async (ja) => ({
+              id: ja.asset.id,
+              url: await this.storageService.getAssetUrl(ja.asset),
+              mimeType: ja.asset.mimeType,
+            })),
+          );
+        }
+      } catch {
+        // Non-critical: event will be sent without outputs
+      }
+    }
+
     const event: JobEvent = {
       jobId: job.id,
       jobType: job.jobType,
@@ -1055,6 +1257,7 @@ export class GenerationService {
       startedAt: job.startedAt?.toISOString() || null,
       completedAt: job.completedAt?.toISOString() || null,
       failedAt: job.failedAt?.toISOString() || null,
+      outputs,
     };
     await this.jobEvents.publishJobEvent(userId, event);
   }
@@ -1062,7 +1265,6 @@ export class GenerationService {
   private async failUnsupportedQueuedJob(
     jobId: string,
     userId: string,
-    reservedCredits: number,
     jobType: string,
   ): Promise<void> {
     const claimed = await this.prisma.generationJob.updateMany({
@@ -1085,7 +1287,6 @@ export class GenerationService {
     await this.failJob(
       jobId,
       userId,
-      reservedCredits,
       `${jobType} jobs are not implemented on the server`,
       `Refund for unsupported ${jobType} job ${jobId}`,
     );

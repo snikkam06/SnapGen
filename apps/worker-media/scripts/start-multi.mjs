@@ -140,6 +140,11 @@ async function main() {
     return;
   }
 
+  loadEnvFiles();
+  if (options.replicas == null) {
+    options.replicas = Number.parseInt(process.env.WORKER_REPLICAS || '2', 10);
+  }
+
   if (!Number.isInteger(options.replicas) || options.replicas < 1) {
     throw new Error(`Invalid replica count: ${String(options.replicas)}`);
   }
@@ -148,10 +153,6 @@ async function main() {
     throw new Error(`Invalid mode: ${options.mode}`);
   }
 
-  loadEnvFiles();
-  if (options.replicas == null) {
-    options.replicas = Number.parseInt(process.env.WORKER_REPLICAS || '2', 10);
-  }
   process.env.DATABASE_URL = resolveDatabaseUrl();
 
   const workerCommand = getWorkerCommand(options.mode);
@@ -171,6 +172,7 @@ async function main() {
 
   const children = [];
   let shuttingDown = false;
+  const SHUTDOWN_GRACE_MS = Number(process.env.WORKER_SHUTDOWN_GRACE_MS) || 10000;
 
   const stopChildren = async (exitCode) => {
     if (shuttingDown) {
@@ -179,17 +181,29 @@ async function main() {
 
     shuttingDown = true;
 
-    for (const child of children) {
-      if (!child.killed) {
-        child.kill('SIGTERM');
+    // Copy array to avoid modification during iteration
+    const currentChildren = [...children];
+
+    for (const child of currentChildren) {
+      try {
+        if (!child.killed) {
+          child.kill('SIGTERM');
+        }
+      } catch {
+        // Process may have already exited
       }
     }
 
-    await delay(1500);
+    await delay(SHUTDOWN_GRACE_MS);
 
-    for (const child of children) {
-      if (child.exitCode === null) {
-        child.kill('SIGKILL');
+    for (const child of currentChildren) {
+      try {
+        if (child.exitCode === null && !child.killed) {
+          process.stdout.write(`[multi-worker] Force killing child pid=${child.pid}\n`);
+          child.kill('SIGKILL');
+        }
+      } catch {
+        // Process may have already exited
       }
     }
 
@@ -197,11 +211,17 @@ async function main() {
   };
 
   process.on('SIGINT', () => {
-    void stopChildren(0);
+    stopChildren(0).catch((err) => {
+      process.stderr.write(`[multi-worker] Error during SIGINT shutdown: ${err.message}\n`);
+      process.exit(1);
+    });
   });
 
   process.on('SIGTERM', () => {
-    void stopChildren(0);
+    stopChildren(0).catch((err) => {
+      process.stderr.write(`[multi-worker] Error during SIGTERM shutdown: ${err.message}\n`);
+      process.exit(1);
+    });
   });
 
   for (let index = 0; index < options.replicas; index += 1) {
@@ -224,14 +244,20 @@ async function main() {
 
       if (!shuttingDown) {
         const normalizedCode = typeof code === 'number' ? code : 1;
-        void stopChildren(normalizedCode);
+        stopChildren(normalizedCode).catch((err) => {
+          process.stderr.write(`[multi-worker] Error during child exit shutdown: ${err.message}\n`);
+          process.exit(1);
+        });
       }
     });
 
     child.on('error', (error) => {
       process.stderr.write(`[${label}] failed to start: ${error.message}\n`);
       if (!shuttingDown) {
-        void stopChildren(1);
+        stopChildren(1).catch((err) => {
+          process.stderr.write(`[multi-worker] Error during error shutdown: ${err.message}\n`);
+          process.exit(1);
+        });
       }
     });
 

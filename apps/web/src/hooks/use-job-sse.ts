@@ -22,26 +22,39 @@ interface JobEvent {
 
 export function useJobSSE() {
   const tokenQuery = useApiToken();
-  const token = tokenQuery.data;
+  const { getToken, isReady, userId } = tokenQuery;
   const queryClient = useQueryClient();
   const abortControllerRef = useRef<AbortController | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelayRef = useRef(2000);
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 20;
 
   useEffect(() => {
-    if (!token) return;
+    if (!isReady || !userId) return;
 
     let closed = false;
-    const reconnectDelayMs = 5000;
+    const INITIAL_DELAY = 2000;
+    const MAX_DELAY = 60000;
 
     const scheduleReconnect = () => {
       if (closed || reconnectTimerRef.current) {
         return;
       }
 
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        console.error('[SSE] Max reconnection attempts reached, giving up');
+        return;
+      }
+      reconnectAttemptsRef.current += 1;
+
+      const delay = reconnectDelayRef.current;
+      reconnectDelayRef.current = Math.min(delay * 2, MAX_DELAY);
+
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null;
-        connect();
-      }, reconnectDelayMs);
+        void connect();
+      }, delay);
     };
 
     function handleJobEvent(event: JobEvent) {
@@ -75,12 +88,17 @@ export function useJobSSE() {
       }
     }
 
-    function connect() {
+    async function connect() {
       if (closed) return;
 
       const url = `${API_BASE_URL}/v1/events/jobs/stream`;
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
+      const token = await getToken();
+      if (!token) {
+        scheduleReconnect();
+        return;
+      }
 
       fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
@@ -92,13 +110,42 @@ export function useJobSSE() {
             return;
           }
 
+          reconnectDelayRef.current = INITIAL_DELAY;
+          reconnectAttemptsRef.current = 0;
+
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
+          let currentEvent = '';
+          let currentData = '';
+
+          const flushEvent = () => {
+            if (!currentData) {
+              currentEvent = '';
+              return;
+            }
+
+            if (currentEvent === 'job.updated') {
+              try {
+                handleJobEvent(JSON.parse(currentData) as JobEvent);
+              } catch (err) {
+                console.warn('[SSE] Failed to parse job event:', currentData, err);
+              }
+            } else if (currentEvent === 'connected') {
+              reconnectDelayRef.current = INITIAL_DELAY;
+              reconnectAttemptsRef.current = 0;
+            } else if (currentEvent === 'error') {
+              console.warn('[SSE] Server error event:', currentData);
+            }
+
+            currentEvent = '';
+            currentData = '';
+          };
 
           while (!closed) {
             const { done, value } = await reader.read();
             if (done) {
+              flushEvent();
               scheduleReconnect();
               break;
             }
@@ -107,25 +154,14 @@ export function useJobSSE() {
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
-            let currentEvent = '';
-            let currentData = '';
-
-            for (const line of lines) {
+            for (const rawLine of lines) {
+              const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
               if (line.startsWith('event: ')) {
                 currentEvent = line.slice(7).trim();
               } else if (line.startsWith('data: ')) {
-                currentData = line.slice(6);
-              } else if (line === '' && currentData) {
-                // End of SSE message
-                if (currentEvent === 'job.updated' || !currentEvent) {
-                  try {
-                    handleJobEvent(JSON.parse(currentData) as JobEvent);
-                  } catch {
-                    // Ignore malformed events
-                  }
-                }
-                currentEvent = '';
-                currentData = '';
+                currentData += (currentData ? '\n' : '') + line.slice(6);
+              } else if (line === '') {
+                flushEvent();
               }
             }
           }
@@ -135,12 +171,12 @@ export function useJobSSE() {
         })
         .catch((err) => {
           if (closed || err.name === 'AbortError') return;
-          console.warn('[SSE] Connection error, reconnecting in 5s');
+          console.warn('[SSE] Connection error, scheduling reconnect');
           scheduleReconnect();
         });
     }
 
-    connect();
+    void connect();
 
     return () => {
       closed = true;
@@ -151,5 +187,5 @@ export function useJobSSE() {
         abortControllerRef.current.abort();
       }
     };
-  }, [token, queryClient]);
+  }, [getToken, isReady, queryClient, userId]);
 }

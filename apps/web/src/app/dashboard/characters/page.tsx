@@ -35,21 +35,21 @@ export default function CharactersPage() {
     const [characterType, setCharacterType] = useState('real');
     const tokenQuery = useApiToken();
     const queryClient = useQueryClient();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const charactersQuery = useQuery({
-        queryKey: ['characters', token],
-        enabled: !!token,
-        queryFn: () => api.getCharacters(token as string) as Promise<Character[]>,
+        queryKey: ['characters', userId],
+        enabled: isReady,
+        queryFn: () => api.getCharacters(getToken) as Promise<Character[]>,
     });
 
     const createCharacterMutation = useMutation({
         mutationFn: async () => {
-            if (!token) {
+            if (!isReady) {
                 throw new Error('Authentication token unavailable');
             }
 
-            return api.createCharacter(token, { name, characterType });
+            return api.createCharacter(getToken, { name, characterType });
         },
         onSuccess: async () => {
             setName('');
@@ -71,12 +71,12 @@ export default function CharactersPage() {
             characterId: string;
             files: File[];
         }) => {
-            if (!token) {
+            if (!isReady) {
                 throw new Error('Authentication token unavailable');
             }
 
             for (const file of files) {
-                await api.uploadCharacterImage(token, characterId, file);
+                await api.uploadCharacterImage(getToken, characterId, file);
             }
         },
         onSuccess: async () => {
@@ -90,8 +90,8 @@ export default function CharactersPage() {
 
     const trainModelMutation = useMutation({
         mutationFn: async (characterId: string) => {
-            if (!token) throw new Error('Authentication token unavailable');
-            return api.trainCharacter(token, characterId, { trainingPreset: 'default' });
+            if (!isReady) throw new Error('Authentication token unavailable');
+            return api.trainCharacter(getToken, characterId, { trainingPreset: 'default' });
         },
         onSuccess: async () => {
             toast.success('Model training started');
@@ -106,8 +106,8 @@ export default function CharactersPage() {
 
     const deleteCharacterMutation = useMutation({
         mutationFn: async (characterId: string) => {
-            if (!token) throw new Error('Authentication token unavailable');
-            return api.deleteCharacter(token, characterId);
+            if (!isReady) throw new Error('Authentication token unavailable');
+            return api.deleteCharacter(getToken, characterId);
         },
         onSuccess: async () => {
             setDeleteTarget(null);

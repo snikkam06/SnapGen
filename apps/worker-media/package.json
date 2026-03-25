@@ -7,7 +7,7 @@
         "dev:single": "node ../../scripts/with-database-url.mjs dotenv -e ../api/.env -- tsx --watch src/index.ts",
         "dev:multi": "node scripts/start-multi.mjs --mode=dev",
         "build": "tsc",
-        "start": "pnpm run start:single",
+        "start": "pnpm run start:multi",
         "start:single": "node ../../scripts/with-database-url.mjs dotenv -e ../api/.env -- node dist/index.js",
         "start:multi": "node scripts/start-multi.mjs --mode=start",
         "clean": "rm -rf dist",

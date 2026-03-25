@@ -48,22 +48,22 @@ const plans = [
 
 export default function BillingPage() {
     const tokenQuery = useApiToken();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const creditsQuery = useQuery({
-        queryKey: ['credits', token],
-        enabled: !!token,
-        queryFn: () => api.getCredits(token as string) as Promise<CreditsResponse>,
+        queryKey: ['credits', userId],
+        enabled: isReady,
+        queryFn: () => api.getCredits(getToken) as Promise<CreditsResponse>,
     });
 
     const meQuery = useQuery({
-        queryKey: ['me', token],
-        enabled: !!token,
-        queryFn: () => api.getMe(token as string) as Promise<MeResponse>,
+        queryKey: ['me', userId],
+        enabled: isReady,
+        queryFn: () => api.getMe(getToken) as Promise<MeResponse>,
     });
 
     const checkoutMutation = useMutation({
-        mutationFn: (planCode: string) => api.createCheckoutSession(token as string, planCode) as Promise<SessionResponse>,
+        mutationFn: (planCode: string) => api.createCheckoutSession(getToken, planCode) as Promise<SessionResponse>,
         onSuccess: (data) => {
             window.location.href = data.url;
         },
@@ -73,7 +73,7 @@ export default function BillingPage() {
     });
 
     const portalMutation = useMutation({
-        mutationFn: () => api.createPortalSession(token as string) as Promise<SessionResponse>,
+        mutationFn: () => api.createPortalSession(getToken) as Promise<SessionResponse>,
         onSuccess: (data) => {
             window.location.href = data.url;
         },

@@ -82,6 +82,97 @@ export interface RedisConnectionConfig {
     maxRetriesPerRequest: null;
 }
 
+type SupabaseUrlExpectation = 'runtime' | 'direct';
+
+function isSupabasePoolerHost(hostname: string): boolean {
+    return hostname.endsWith('.pooler.supabase.com');
+}
+
+function isSupabaseDirectHost(hostname: string): boolean {
+    return hostname.startsWith('db.') && hostname.endsWith('.supabase.co');
+}
+
+function validateSupabaseUrl(
+    envVar: 'DATABASE_URL' | 'DIRECT_URL' | 'DATABASE_READ_URL',
+    rawValue: string | undefined,
+    expectation: SupabaseUrlExpectation,
+): string[] {
+    if (!rawValue?.trim()) {
+        return [];
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(rawValue);
+    } catch {
+        return [];
+    }
+
+    const errors: string[] = [];
+    const host = parsed.hostname;
+    const port = parsed.port;
+
+    if (expectation === 'runtime') {
+        if (isSupabaseDirectHost(host)) {
+            errors.push(
+                `${envVar} points to the direct Supabase host (${host}). Use the transaction pooler host on port 6543 for runtime queries.`,
+            );
+        }
+
+        if (isSupabasePoolerHost(host) && port !== '6543') {
+            errors.push(
+                `${envVar} points to the Supabase pooler on port ${port || '(default)'}. Use port 6543 for transaction mode runtime queries.`,
+            );
+        }
+
+        if (
+            isSupabasePoolerHost(host)
+            && port === '6543'
+            && parsed.searchParams.get('pgbouncer') !== 'true'
+        ) {
+            errors.push(
+                `${envVar} is missing pgbouncer=true. Supabase transaction mode requires pgbouncer=true so Prisma does not use prepared statements.`,
+            );
+        }
+    }
+
+    if (expectation === 'direct') {
+        if (isSupabasePoolerHost(host)) {
+            errors.push(
+                `${envVar} points to the Supabase pooler host (${host}). Use the direct database host (db.<project-ref>.supabase.co:5432) for migrations.`,
+            );
+        }
+
+        if (isSupabaseDirectHost(host) && port && port !== '5432') {
+            errors.push(
+                `${envVar} points to the Supabase direct host on port ${port}. Use port 5432 for direct migration access.`,
+            );
+        }
+    }
+
+    return errors;
+}
+
+export function assertValidSupabaseDatabaseConfig(options: {
+    databaseUrl?: string;
+    directUrl?: string;
+    readUrl?: string;
+    context?: string;
+}): void {
+    const errors = [
+        ...validateSupabaseUrl('DATABASE_URL', options.databaseUrl, 'runtime'),
+        ...validateSupabaseUrl('DIRECT_URL', options.directUrl, 'direct'),
+        ...validateSupabaseUrl('DATABASE_READ_URL', options.readUrl, 'runtime'),
+    ];
+
+    if (errors.length === 0) {
+        return;
+    }
+
+    const prefix = options.context ? `[${options.context}] ` : '';
+    throw new Error(`${prefix}${errors.join(' ')}`);
+}
+
 export function getRedisConnectionConfig(
     redisUrl = 'redis://localhost:6379',
 ): RedisConnectionConfig {

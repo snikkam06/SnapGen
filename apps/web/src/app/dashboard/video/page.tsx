@@ -106,7 +106,7 @@ function VideoPageContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tokenQuery = useApiToken();
   const queryClient = useQueryClient();
-  const token = tokenQuery.data;
+  const { getToken, isReady, userId } = tokenQuery;
 
   useEffect(() => {
     setActiveJobId(initialJobId);
@@ -123,9 +123,9 @@ function VideoPageContent() {
   }, [initialSourceAssetId]);
 
   const assetsQuery = useQuery({
-    queryKey: ['assets', token, 'video-sources'],
-    enabled: !!token && videoMode === 'image',
-    queryFn: () => api.getAssets(token as string, { limit: '60' }) as Promise<AssetsResponse>,
+    queryKey: ['assets', userId, 'video-sources'],
+    enabled: isReady && videoMode === 'image',
+    queryFn: () => api.getAssets(getToken, { limit: '60' }) as Promise<AssetsResponse>,
   });
 
   const sourceAssets = useMemo(() => {
@@ -162,8 +162,8 @@ function VideoPageContent() {
       : null;
 
   const jobQuery = useQuery({
-    queryKey: ['job', token, activeJobId],
-    enabled: !!token && !!activeJobId,
+    queryKey: ['job', userId, activeJobId],
+    enabled: isReady && !!activeJobId,
     refetchInterval: (query) => {
       const status = (query.state.data as JobDetail | undefined)?.status;
       if (status === 'completed' || status === 'failed') return false;
@@ -173,13 +173,13 @@ function VideoPageContent() {
       }
       return 30000; // Fallback polling; SSE provides real-time updates
     },
-    queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
+    queryFn: () => api.getJob(getToken, activeJobId as string) as Promise<JobDetail>,
   });
 
   const uploadSourceMutation = useMutation({
     mutationFn: async (file: File) => {
-      if (!token) throw new Error('Authentication token unavailable');
-      return api.uploadImageAsset(token, file) as Promise<AssetItem>;
+      if (!isReady) throw new Error('Authentication token unavailable');
+      return api.uploadImageAsset(getToken, file) as Promise<AssetItem>;
     },
     onSuccess: async (asset) => {
       setUploadedAsset(asset);
@@ -196,8 +196,8 @@ function VideoPageContent() {
 
   const generateMutation = useMutation({
     mutationFn: async () => {
-      if (!token) throw new Error('Authentication token unavailable');
-      return api.generateVideo(token, {
+      if (!isReady) throw new Error('Authentication token unavailable');
+      return api.generateVideo(getToken, {
         prompt: prompt.trim(),
         sourceAssetId: videoMode === 'image' ? activeSourceAssetId || undefined : undefined,
         settings: {

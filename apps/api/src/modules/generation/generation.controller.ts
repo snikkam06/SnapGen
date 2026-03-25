@@ -10,7 +10,11 @@ import { CurrentUser, AuthUser } from '../../decorators/current-user.decorator';
 @Controller('v1/generations')
 @UseGuards(ClerkAuthGuard)
 @ApiBearerAuth()
-@Throttle({ default: { ttl: RATE_LIMITS.generation.ttl * 1000, limit: RATE_LIMITS.generation.limit } })
+@Throttle({
+  short: { ttl: 1000, limit: RATE_LIMITS.generation.limit },
+  medium: { ttl: 10000, limit: RATE_LIMITS.generation.limit },
+  long: { ttl: RATE_LIMITS.generation.ttl * 1000, limit: RATE_LIMITS.generation.limit },
+})
 export class GenerationController {
   constructor(private generationService: GenerationService) {}
 

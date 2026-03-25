@@ -19,9 +19,39 @@ export interface JobEvent {
 @Injectable()
 export class JobEventsService implements OnModuleDestroy {
   private publisher: Redis | null = null;
+  private publisherReady: Promise<boolean> | null = null;
   private subscriber: Redis | null = null;
   private listeners = new Map<string, Set<(event: JobEvent) => void>>();
   private subscribedChannels = new Set<string>();
+
+  private emitToLocalListeners(channel: string, event: JobEvent): void {
+    const listeners = this.listeners.get(channel);
+    if (!listeners?.size) {
+      return;
+    }
+
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[JobEventsService] Listener callback error:', err);
+      }
+    }
+  }
+
+  private async resetPublisher(): Promise<void> {
+    const publisher = this.publisher;
+    this.publisher = null;
+    this.publisherReady = null;
+
+    if (!publisher) {
+      return;
+    }
+
+    await publisher.quit().catch(() => {
+      publisher.disconnect();
+    });
+  }
 
   private getPublisher(): Redis | null {
     if (this.publisher) return this.publisher;
@@ -31,12 +61,7 @@ export class JobEventsService implements OnModuleDestroy {
     try {
       const config = getRedisConnectionConfig(process.env.REDIS_URL);
       this.publisher = new Redis({
-        host: config.host,
-        port: config.port,
-        db: config.db,
-        username: config.username,
-        password: config.password,
-        tls: config.tls,
+        ...config,
         maxRetriesPerRequest: null,
         lazyConnect: true,
       });
@@ -45,9 +70,13 @@ export class JobEventsService implements OnModuleDestroy {
         console.warn('[JobEventsService] Redis publisher error:', err.message);
       });
 
-      void this.publisher.connect().catch(() => {
-        // Connection will be retried on next publish
-      });
+      this.publisherReady = this.publisher.connect()
+        .then(() => true)
+        .catch(async (err) => {
+          console.error('[JobEventsService] Redis publisher connection failed:', err.message);
+          await this.resetPublisher();
+          return false;
+        });
 
       return this.publisher;
     } catch {
@@ -90,7 +119,11 @@ export class JobEventsService implements OnModuleDestroy {
         try {
           const event = JSON.parse(message) as JobEvent;
           for (const listener of listeners) {
-            listener(event);
+            try {
+              listener(event);
+            } catch (err) {
+              console.error('[JobEventsService] Listener callback error:', err);
+            }
           }
         } catch {
           // Ignore malformed messages from Redis.
@@ -107,14 +140,26 @@ export class JobEventsService implements OnModuleDestroy {
   }
 
   async publishJobEvent(userId: string, event: JobEvent): Promise<void> {
+    const channel = `job-events:user:${userId}`;
     const pub = this.getPublisher();
-    if (!pub) return;
+    if (!pub) {
+      this.emitToLocalListeners(channel, event);
+      return;
+    }
 
     try {
-      const channel = `job-events:user:${userId}`;
+      if (this.publisherReady) {
+        const connected = await this.publisherReady;
+        if (!connected) {
+          this.emitToLocalListeners(channel, event);
+          return;
+        }
+      }
       await pub.publish(channel, JSON.stringify(event));
     } catch (error) {
       console.warn('[JobEventsService] Failed to publish job event:', error);
+      this.emitToLocalListeners(channel, event);
+      await this.resetPublisher();
     }
   }
 
@@ -129,8 +174,12 @@ export class JobEventsService implements OnModuleDestroy {
 
     const subscriber = await this.getSubscriber();
     if (subscriber && !this.subscribedChannels.has(channel)) {
-      await subscriber.subscribe(channel);
-      this.subscribedChannels.add(channel);
+      try {
+        await subscriber.subscribe(channel);
+        this.subscribedChannels.add(channel);
+      } catch {
+        console.warn(`[JobEventsService] Failed to subscribe to channel ${channel}`);
+      }
     }
 
     return async () => {
@@ -140,23 +189,19 @@ export class JobEventsService implements OnModuleDestroy {
       }
 
       currentListeners.delete(listener);
-      if (currentListeners.size > 0) {
-        return;
-      }
 
-      this.listeners.delete(channel);
-      if (this.subscriber && this.subscribedChannels.has(channel)) {
-        await this.subscriber.unsubscribe(channel).catch(() => {});
-        this.subscribedChannels.delete(channel);
+      if (currentListeners.size === 0) {
+        this.listeners.delete(channel);
+        if (this.subscriber && this.subscribedChannels.has(channel)) {
+          await this.subscriber.unsubscribe(channel).catch(() => {});
+          this.subscribedChannels.delete(channel);
+        }
       }
     };
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (this.publisher) {
-      await this.publisher.quit().catch(() => {});
-      this.publisher = null;
-    }
+    await this.resetPublisher();
 
     if (this.subscriber) {
       for (const channel of this.subscribedChannels) {

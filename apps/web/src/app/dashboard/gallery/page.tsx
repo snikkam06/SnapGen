@@ -86,15 +86,15 @@ export default function GalleryPage() {
   const queryClient = useQueryClient();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const token = tokenQuery.data;
+  const { getToken, isReady, userId } = tokenQuery;
   const deferredSearch = useDeferredValue(search);
 
   const assetsQuery = useInfiniteQuery({
-    queryKey: ['assets', token, sort, 'gallery'],
-    enabled: !!token,
+    queryKey: ['assets', userId, sort, 'gallery'],
+    enabled: isReady,
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
-      api.getAssets(token as string, {
+      api.getAssets(getToken, {
         page: String(pageParam),
         limit: String(PAGE_SIZE),
         sort,
@@ -110,15 +110,15 @@ export default function GalleryPage() {
 
   const deleteAssetMutation = useMutation({
     mutationFn: async (assetId: string) => {
-      if (!token) {
+      if (!isReady) {
         throw new Error('Authentication token unavailable');
       }
 
-      return api.deleteAsset(token, assetId);
+      return api.deleteAsset(getToken, assetId);
     },
     onSuccess: async (_response, assetId) => {
       queryClient.setQueriesData<InfiniteData<AssetsResponse, number>>(
-        { queryKey: ['assets', token] },
+        { queryKey: ['assets', userId] },
         (current) => {
           if (!current) {
             return current;
@@ -144,7 +144,7 @@ export default function GalleryPage() {
         },
       );
       toast.success('Asset removed');
-      await queryClient.invalidateQueries({ queryKey: ['assets', token] });
+      await queryClient.invalidateQueries({ queryKey: ['assets', userId] });
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'Failed to delete asset');
@@ -153,15 +153,15 @@ export default function GalleryPage() {
 
   const uploadImageMutation = useMutation({
     mutationFn: async (file: File) => {
-      if (!token) {
+      if (!isReady) {
         throw new Error('Authentication token unavailable');
       }
 
-      return api.uploadImageAsset(token, file) as Promise<GalleryItem>;
+      return api.uploadImageAsset(getToken, file) as Promise<GalleryItem>;
     },
     onSuccess: async () => {
       toast.success('Image added to gallery');
-      await queryClient.invalidateQueries({ queryKey: ['assets', token] });
+      await queryClient.invalidateQueries({ queryKey: ['assets', userId] });
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'Failed to upload image');
