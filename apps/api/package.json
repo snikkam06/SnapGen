@@ -3,10 +3,10 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" nest start --watch --port 3001",
+        "dev": "node ../../scripts/with-database-url.mjs nest start --watch --port 3001",
         "build": "nest build",
-        "start": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" node dist/main",
-        "lint": "eslint \"{src,test}/**/*.ts\"",
+        "start": "node ../../scripts/with-database-url.mjs node dist/main",
+        "lint": "ESLINT_USE_FLAT_CONFIG=false eslint \"{src,test}/**/*.ts\"",
         "typecheck": "tsc --noEmit",
         "clean": "rm -rf dist"
     },

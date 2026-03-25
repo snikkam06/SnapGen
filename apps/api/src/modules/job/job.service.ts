@@ -13,14 +13,14 @@ export class JobService {
   ) {}
 
   async findAll(clerkUserId: string, filters?: { status?: string; jobType?: string }) {
-    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    const user = await this.prisma.reader.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
     const where: Record<string, unknown> = { userId: user.id };
     if (filters?.status) where.status = filters.status;
     if (filters?.jobType) where.jobType = filters.jobType;
 
-    const jobs = await this.prisma.generationJob.findMany({
+    const jobs = await this.prisma.reader.generationJob.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: 50,
@@ -42,10 +42,10 @@ export class JobService {
   async findOne(clerkUserId: string, id: string) {
     assertUuid(id, 'jobId');
 
-    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    const user = await this.prisma.reader.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
-    const job = await this.prisma.generationJob.findUnique({
+    const job = await this.prisma.reader.generationJob.findUnique({
       where: { id },
       include: {
         jobAssets: {

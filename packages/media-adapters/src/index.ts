@@ -764,10 +764,12 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
   private apiKey: string;
   private baseUrl =
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent';
-  private static completedJobs = new Map<
+  private requestTimeoutMs = Number(process.env.GOOGLE_IMAGE_REQUEST_TIMEOUT_MS || 45000);
+  private requestRetryLimit = Number(process.env.GOOGLE_IMAGE_RETRY_LIMIT || 3);
+  private static jobs = new Map<
     string,
     {
-      status: 'completed' | 'failed';
+      status: 'running' | 'completed' | 'failed';
       outputs?: Array<{ url: string; mimeType: string }>;
       errorMessage?: string;
     }
@@ -786,25 +788,33 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     }
 
     const requestCount = Math.max(1, Math.min(input.numImages ?? 1, 4));
-    const outputs = (
-      await Promise.all(
-        Array.from({ length: requestCount }, async () => this.generateImages(input)),
-      )
-    ).flat();
-
-    if (!outputs.length) {
-      throw new Error('Google Gemini returned no image outputs');
-    }
-
     const externalJobId = `google-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    GoogleImageAdapter.completedJobs.set(externalJobId, {
-      status: 'completed',
-      outputs,
+    GoogleImageAdapter.jobs.set(externalJobId, {
+      status: 'running',
     });
+
+    void this.generateAllImages(input, requestCount)
+      .then((resultSets) => {
+        const outputs = resultSets.flat();
+        if (!outputs.length) {
+          throw new Error('Google Gemini returned no image outputs');
+        }
+
+        GoogleImageAdapter.jobs.set(externalJobId, {
+          status: 'completed',
+          outputs,
+        });
+      })
+      .catch((error) => {
+        GoogleImageAdapter.jobs.set(externalJobId, {
+          status: 'failed',
+          errorMessage: error instanceof Error ? error.message : 'Google image generation failed',
+        });
+      });
 
     return {
       externalJobId,
-      status: 'completed',
+      status: 'running',
     };
   }
 
@@ -813,15 +823,52 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string }>;
     errorMessage?: string;
   }> {
-    const completedJob = GoogleImageAdapter.completedJobs.get(externalJobId);
-    if (!completedJob) {
+    const job = GoogleImageAdapter.jobs.get(externalJobId);
+    if (!job) {
       return {
         status: 'failed',
         errorMessage: 'Google image job result is unavailable',
       };
     }
 
-    return completedJob;
+    return job;
+  }
+
+  private async generateAllImages(
+    input: ImageGenerationInput,
+    requestCount: number,
+  ): Promise<Array<Array<{ url: string; mimeType: string }>>> {
+    const outputs: Array<Array<{ url: string; mimeType: string }>> = [];
+
+    // Run sequentially so one "4 image" job does not burst 4 parallel Google requests.
+    for (let index = 0; index < requestCount; index += 1) {
+      outputs.push(await this.generateImagesWithRetry(input, index));
+    }
+
+    return outputs;
+  }
+
+  private async generateImagesWithRetry(
+    input: ImageGenerationInput,
+    requestIndex: number,
+  ): Promise<Array<{ url: string; mimeType: string }>> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.requestRetryLimit; attempt += 1) {
+      try {
+        return await this.generateImages(input);
+      } catch (error) {
+        lastError = this.normalizeGoogleError(error, requestIndex, attempt);
+        if (attempt >= this.requestRetryLimit || !this.isRetryableGoogleError(lastError)) {
+          throw lastError;
+        }
+
+        const backoffMs = Math.min(1000 * attempt, 3000);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw lastError ?? new Error('Google image generation failed');
   }
 
   private async generateImages(
@@ -830,6 +877,7 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     const parts = await this.buildParts(input);
     const response = await fetch(this.baseUrl, {
       method: 'POST',
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
       headers: {
         'x-goog-api-key': this.apiKey,
         'Content-Type': 'application/json',
@@ -867,6 +915,43 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     }
 
     return outputs;
+  }
+
+  private normalizeGoogleError(error: unknown, requestIndex: number, attempt: number): Error {
+    if (error instanceof Error) {
+      const causeMessage =
+        error.cause instanceof Error
+          ? error.cause.message
+          : typeof error.cause === 'string'
+            ? error.cause
+            : '';
+      const detail = causeMessage && !error.message.includes(causeMessage) ? `: ${causeMessage}` : '';
+      return new Error(
+        `Google image request ${requestIndex + 1} failed on attempt ${attempt}: ${error.message}${detail}`,
+      );
+    }
+
+    return new Error(
+      `Google image request ${requestIndex + 1} failed on attempt ${attempt}: ${String(error)}`,
+    );
+  }
+
+  private isRetryableGoogleError(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('fetch failed') ||
+      message.includes('timeout') ||
+      message.includes('timed out') ||
+      message.includes('high demand') ||
+      message.includes('temporarily unavailable') ||
+      message.includes('429') ||
+      message.includes('500') ||
+      message.includes('502') ||
+      message.includes('503') ||
+      message.includes('504') ||
+      message.includes('econnreset') ||
+      message.includes('socket hang up')
+    );
   }
 
   private buildSystemInstruction(input: ImageGenerationInput): string {

@@ -25,6 +25,7 @@ import { useState } from 'react';
 import { AuthSync } from '@/components/auth-sync';
 import { Providers } from '@/components/providers';
 import { useApiToken } from '@/hooks/use-api-token';
+import { useJobSSE } from '@/hooks/use-job-sse';
 import { api } from '@/lib/api-client';
 import { formatCredits } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -73,10 +74,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const tokenQuery = useApiToken();
+  const { getToken, isReady, userId } = tokenQuery;
+  useJobSSE();
   const creditsQuery = useQuery({
-    queryKey: ['credits', tokenQuery.data],
-    enabled: !!tokenQuery.data,
-    queryFn: () => api.getCredits(tokenQuery.data as string) as Promise<{ balance: number }>,
+    queryKey: ['credits', userId],
+    enabled: isReady,
+    queryFn: () => api.getCredits(getToken) as Promise<{ balance: number }>,
   });
 
   return (

@@ -12,7 +12,7 @@ export class AdminService {
   ) {}
 
   async searchUsers(query: string) {
-    return this.prisma.user.findMany({
+    return this.prisma.reader.user.findMany({
       where: {
         OR: [
           { email: { contains: query, mode: 'insensitive' } },
@@ -25,7 +25,7 @@ export class AdminService {
   }
 
   async getFailedJobs() {
-    return this.prisma.generationJob.findMany({
+    return this.prisma.reader.generationJob.findMany({
       where: { status: 'failed' },
       orderBy: { failedAt: 'desc' },
       take: 50,
@@ -70,7 +70,7 @@ export class AdminService {
   }
 
   async getModerationQueue() {
-    return this.prisma.asset.findMany({
+    return this.prisma.reader.asset.findMany({
       where: { moderationStatus: 'pending' },
       orderBy: { createdAt: 'desc' },
       take: 50,

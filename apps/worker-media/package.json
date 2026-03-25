@@ -3,27 +3,32 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../api/.env -- tsx --watch src/index.ts",
+        "dev": "pnpm run dev:single",
+        "dev:single": "node ../../scripts/with-database-url.mjs dotenv -e ../api/.env -- tsx --watch src/index.ts",
+        "dev:multi": "node scripts/start-multi.mjs --mode=dev",
         "build": "tsc",
-        "start": "DATABASE_URL=\"$(node ../../scripts/resolve-database-url.mjs)\" dotenv -e ../api/.env -- node dist/index.js",
+        "start": "pnpm run start:multi",
+        "start:single": "node ../../scripts/with-database-url.mjs dotenv -e ../api/.env -- node dist/index.js",
+        "start:multi": "node scripts/start-multi.mjs --mode=start",
         "clean": "rm -rf dist",
         "typecheck": "tsc --noEmit",
         "lint": "echo 'no lint configured'"
     },
     "dependencies": {
         "@aws-sdk/client-s3": "^3.637.0",
-        "bullmq": "^5.12.0",
         "@prisma/client": "^5.20.0",
-        "dotenv": "^16.4.5",
-        "@snapgen/db": "workspace:*",
         "@snapgen/config": "workspace:*",
+        "@snapgen/db": "workspace:*",
         "@snapgen/media-adapters": "workspace:*",
-        "@snapgen/types": "workspace:*"
+        "@snapgen/types": "workspace:*",
+        "bullmq": "^5.12.0",
+        "dotenv": "^16.4.5",
+        "ioredis": "^5.10.0"
     },
     "devDependencies": {
         "dotenv-cli": "^7.4.2",
+        "prisma": "^5.20.0",
         "tsx": "^4.19.0",
-        "typescript": "^5.5.0",
-        "prisma": "^5.20.0"
+        "typescript": "^5.5.0"
     }
 }

@@ -43,7 +43,7 @@ export class ClerkAuthGuard implements CanActivate {
                 emailVerified: decoded.email_verified,
             };
             return true;
-        } catch (error) {
+        } catch {
             throw new UnauthorizedException('Invalid or expired token');
         }
     }

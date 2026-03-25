@@ -46,27 +46,27 @@ const quickActions = [
 
 export default function DashboardPage() {
     const tokenQuery = useApiToken();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const meQuery = useQuery({
-        queryKey: ['me', token],
-        enabled: !!token,
-        queryFn: () => api.getMe(token as string) as Promise<MeResponse>,
+        queryKey: ['me', userId],
+        enabled: isReady,
+        queryFn: () => api.getMe(getToken) as Promise<MeResponse>,
     });
     const creditsQuery = useQuery({
-        queryKey: ['credits', token],
-        enabled: !!token,
-        queryFn: () => api.getCredits(token as string) as Promise<{ balance: number }>,
+        queryKey: ['credits', userId],
+        enabled: isReady,
+        queryFn: () => api.getCredits(getToken) as Promise<{ balance: number }>,
     });
     const charactersQuery = useQuery({
-        queryKey: ['characters', token],
-        enabled: !!token,
-        queryFn: () => api.getCharacters(token as string) as Promise<CharacterListItem[]>,
+        queryKey: ['characters', userId],
+        enabled: isReady,
+        queryFn: () => api.getCharacters(getToken) as Promise<CharacterListItem[]>,
     });
     const jobsQuery = useQuery({
-        queryKey: ['jobs', token],
-        enabled: !!token,
-        queryFn: () => api.getJobs(token as string) as Promise<JobListItem[]>,
+        queryKey: ['jobs', userId],
+        enabled: isReady,
+        queryFn: () => api.getJobs(getToken) as Promise<JobListItem[]>,
     });
 
     const jobs = jobsQuery.data || [];

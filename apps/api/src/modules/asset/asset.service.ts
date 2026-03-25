@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Asset, Prisma } from '@prisma/client';
 import { STORAGE_BUCKETS, UPLOAD_LIMITS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -44,7 +44,7 @@ type AssetWithContext = Prisma.AssetGetPayload<{
   };
 }>;
 
-type AssetForSerialization = Prisma.AssetGetPayload<{}> & {
+type AssetForSerialization = Asset & {
   jobAssets?: AssetWithContext['jobAssets'];
 };
 
@@ -56,7 +56,7 @@ export class AssetService {
   ) {}
 
   async findAll(clerkUserId: string, params?: AssetListParams) {
-    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
+    const user = await this.prisma.reader.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
     const page = Math.max(1, params?.page || 1);
@@ -69,7 +69,7 @@ export class AssetService {
     if (params?.kind) where.kind = params.kind;
 
     const [items, total] = await Promise.all([
-      this.prisma.asset.findMany({
+      this.prisma.reader.asset.findMany({
         where,
         orderBy: { createdAt: sort === 'oldest' ? 'asc' : 'desc' },
         skip: (page - 1) * limit,
@@ -102,7 +102,7 @@ export class AssetService {
           },
         },
       }),
-      this.prisma.asset.count({ where }),
+      this.prisma.reader.asset.count({ where }),
     ]);
 
     const data = await Promise.all(items.map((item) => this.serializeAsset(item)));

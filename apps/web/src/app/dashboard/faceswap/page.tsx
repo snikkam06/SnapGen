@@ -45,22 +45,22 @@ export default function FaceSwapPage() {
 
     const tokenQuery = useApiToken();
     const queryClient = useQueryClient();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const jobQuery = useQuery({
-        queryKey: ['job', token, activeJobId],
-        enabled: !!token && !!activeJobId,
+        queryKey: ['job', userId, activeJobId],
+        enabled: isReady && !!activeJobId,
         refetchInterval: (query) => {
             const status = (query.state.data as JobDetail | undefined)?.status;
-            return status === 'completed' || status === 'failed' ? false : 4000;
+            return status === 'completed' || status === 'failed' ? false : 30000; // Fallback polling; SSE provides real-time updates
         },
-        queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
+        queryFn: () => api.getJob(getToken, activeJobId as string) as Promise<JobDetail>,
     });
 
     const uploadMutation = useMutation({
         mutationFn: async ({ file, target }: { file: File; target: 'source' | 'target' }) => {
-            if (!token) throw new Error('Authentication token unavailable');
-            const result = await api.uploadImageAsset(token, file) as { id: string; url: string };
+            if (!isReady) throw new Error('Authentication token unavailable');
+            const result = await api.uploadImageAsset(getToken, file) as { id: string; url: string };
             return { ...result, target };
         },
         onSuccess: (result) => {
@@ -78,10 +78,10 @@ export default function FaceSwapPage() {
 
     const faceSwapMutation = useMutation({
         mutationFn: async () => {
-            if (!token) throw new Error('Authentication token unavailable');
+            if (!isReady) throw new Error('Authentication token unavailable');
             if (!sourceAsset || !targetAsset) throw new Error('Please upload both images');
 
-            return api.faceSwapImage(token, {
+            return api.faceSwapImage(getToken, {
                 sourceAssetId: sourceAsset.id,
                 targetAssetId: targetAsset.id,
             }) as Promise<{ id: string }>;
