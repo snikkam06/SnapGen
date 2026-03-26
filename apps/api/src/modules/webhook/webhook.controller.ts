@@ -27,7 +27,7 @@ export class WebhookController {
     @Req() req: RawBodyRequest<Request>,
     @Headers('stripe-signature') signature: string,
   ) {
-    const rawBody = req.rawBody;
+    const rawBody = (req as any).rawBody as Buffer | undefined;
     if (!rawBody) throw new BadRequestException('Missing raw body');
     if (!signature) throw new BadRequestException('Missing Stripe signature');
     try {
