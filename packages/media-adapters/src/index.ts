@@ -927,29 +927,29 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
       status: 'running',
     });
 
-    void this.generateAllImages(input, requestCount)
-      .then((resultSets) => {
-        const outputs = resultSets.flat();
-        if (!outputs.length) {
-          throw new Error('Google Gemini returned no image outputs');
-        }
+    try {
+      const resultSets = await this.generateAllImages(input, requestCount);
+      const outputs = resultSets.flat();
+      if (!outputs.length) {
+        throw new Error('Google Gemini returned no image outputs');
+      }
 
-        GoogleImageAdapter.jobs.set(externalJobId, {
-          status: 'completed',
-          outputs,
-        });
-      })
-      .catch((error) => {
-        GoogleImageAdapter.jobs.set(externalJobId, {
-          status: 'failed',
-          errorMessage: error instanceof Error ? error.message : 'Google image generation failed',
-        });
+      GoogleImageAdapter.jobs.set(externalJobId, {
+        status: 'completed',
+        outputs,
       });
 
-    return {
-      externalJobId,
-      status: 'running',
-    };
+      return {
+        externalJobId,
+        status: 'completed',
+      };
+    } catch (error) {
+      GoogleImageAdapter.jobs.set(externalJobId, {
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'Google image generation failed',
+      });
+      throw error;
+    }
   }
 
   async getJob(externalJobId: string): Promise<{
