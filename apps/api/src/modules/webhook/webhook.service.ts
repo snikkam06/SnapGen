@@ -239,11 +239,17 @@ export class WebhookService {
     tx: TransactionClient,
     subscription: Stripe.Subscription,
   ) {
+    // current_period_end may be on the subscription or on the first item (newer API versions)
+    const sub = subscription as any;
+    const periodEnd = sub.current_period_end
+      ?? sub.items?.data?.[0]?.current_period_end
+      ?? null;
+
     await tx.subscription.updateMany({
       where: { stripeSubscriptionId: subscription.id },
       data: {
         status: subscription.status === 'active' ? 'active' : 'inactive',
-        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+        ...(periodEnd ? { currentPeriodEnd: new Date(periodEnd * 1000) } : {}),
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
       },
     });
