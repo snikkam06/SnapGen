@@ -150,9 +150,9 @@ function validateSupabaseUrl(
     }
 
     if (expectation === 'direct') {
-        if (isSupabasePoolerHost(host)) {
+        if (isSupabasePoolerHost(host) && port && port !== '5432') {
             errors.push(
-                `${envVar} points to the Supabase pooler host (${host}). Use the direct database host (db.<project-ref>.supabase.co:5432) for migrations.`,
+                `${envVar} points to the Supabase pooler on port ${port}. Use the session pooler on port 5432 for IPv4 migrations, or the direct database host on port 5432 when IPv6 direct access is available.`,
             );
         }
 

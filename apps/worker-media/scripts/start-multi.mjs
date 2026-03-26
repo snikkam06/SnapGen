@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -67,29 +67,15 @@ function loadEnvFiles() {
   }
 }
 
-function resolveDatabaseUrl() {
-  const env = { ...process.env };
-  if (!env.DATABASE_URL?.trim()) {
-    delete env.DATABASE_URL;
+function requireDatabaseUrl() {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error(
+      `DATABASE_URL is not set after loading env files. Checked: ${path.join(repoRoot, '.env')}, ${path.join(repoRoot, 'apps/api/.env')}`,
+    );
   }
 
-  const result = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/resolve-database-url.mjs')], {
-    cwd: repoRoot,
-    env,
-    encoding: 'utf8',
-  });
-
-  if (result.status !== 0) {
-    const errorOutput = (result.stderr || result.stdout || 'Unknown error').trim();
-    throw new Error(`Failed to resolve DATABASE_URL: ${errorOutput}`);
-  }
-
-  const resolvedUrl = result.stdout.trim();
-  if (!resolvedUrl) {
-    throw new Error('Failed to resolve DATABASE_URL: script returned an empty value');
-  }
-
-  return resolvedUrl;
+  return databaseUrl;
 }
 
 function getWorkerCommand(mode) {
@@ -153,7 +139,7 @@ async function main() {
     throw new Error(`Invalid mode: ${options.mode}`);
   }
 
-  process.env.DATABASE_URL = resolveDatabaseUrl();
+  process.env.DATABASE_URL = requireDatabaseUrl();
 
   const workerCommand = getWorkerCommand(options.mode);
   const commandPreview = `${workerCommand.command} ${workerCommand.args.join(' ')}`;
