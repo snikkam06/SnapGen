@@ -652,10 +652,13 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     }
 
     return {
-      externalJobId: this.encodeExternalJobId(
-        endpointPath,
-        data.request_id ?? data.response_url ?? `fal-${Date.now()}-${index}`,
-      ),
+      externalJobId:
+        data.status_url && data.request_id
+          ? encodeFalStatusHandle(data.status_url, data.request_id)
+          : this.encodeExternalJobId(
+              endpointPath,
+              data.request_id ?? data.response_url ?? `fal-${Date.now()}-${index}`,
+            ),
       status,
     };
   }
@@ -1675,8 +1678,13 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       data.request_id ?? data.response_url ?? `fal-faceswap-${Date.now()}`,
     );
 
+    const resolvedExternalJobId =
+      data.status_url && data.request_id
+        ? encodeFalStatusHandle(data.status_url, data.request_id)
+        : externalJobId;
+
     return {
-      externalJobId,
+      externalJobId: resolvedExternalJobId,
       status,
     };
   }
