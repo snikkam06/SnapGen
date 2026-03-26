@@ -1,15 +1,16 @@
 function getApiBaseUrl() {
+    // Browser traffic should stay same-origin and use the Next.js rewrite.
+    if (typeof window !== 'undefined') {
+        return '/api';
+    }
+
     if (process.env.NEXT_PUBLIC_API_BASE_URL) {
         return process.env.NEXT_PUBLIC_API_BASE_URL;
     }
-    // Server-side: use absolute URL to the backend directly
-    if (typeof window === 'undefined') {
-        return process.env.API_SERVER_URL
-            ? `${process.env.API_SERVER_URL}/api`
-            : 'http://localhost:3001/api';
-    }
-    // Client-side: use relative URL (proxied by Next.js rewrites)
-    return '/api';
+
+    return process.env.API_SERVER_URL
+        ? `${process.env.API_SERVER_URL}/api`
+        : 'http://localhost:3001/api';
 }
 
 const API_BASE_URL = getApiBaseUrl();
