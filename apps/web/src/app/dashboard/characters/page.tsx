@@ -9,7 +9,6 @@ import {
     Search,
     Upload,
     Sparkles,
-    Cpu,
     Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -85,20 +84,6 @@ export default function CharactersPage() {
         },
         onError: (error) => {
             toast.error(error instanceof Error ? error.message : 'Failed to upload images');
-        },
-    });
-
-    const trainModelMutation = useMutation({
-        mutationFn: async (characterId: string) => {
-            if (!isReady) throw new Error('Authentication token unavailable');
-            return api.trainCharacter(getToken, characterId, { trainingPreset: 'default' });
-        },
-        onSuccess: async () => {
-            toast.success('Model training started');
-            await queryClient.invalidateQueries({ queryKey: ['characters'] });
-        },
-        onError: (error) => {
-            toast.error(error instanceof Error ? error.message : 'Failed to start training');
         },
     });
 
@@ -199,13 +184,24 @@ export default function CharactersPage() {
                                 </div>
                             </div>
                             <div className="p-4">
-                                <h3 className="font-semibold truncate">{character.name}</h3>
-                                <p className="text-sm text-white/40 mt-1">
-                                    {character.imageCount} datasets • {character.characterType}
-                                </p>
-                                <div className="mt-4 flex gap-2">
-                                    <label className="btn-secondary flex-1 cursor-pointer text-center">
-                                        <Upload className="w-4 h-4 mr-2 inline-flex" />
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <h3 className="font-semibold truncate">{character.name}</h3>
+                                        <p className="text-sm text-white/40 mt-1">
+                                            {character.imageCount} datasets • {character.characterType}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setDeleteTarget(character)}
+                                        className="btn-secondary h-9 w-9 shrink-0 px-0 text-red-400 hover:text-red-300 hover:border-red-500/30"
+                                        title="Delete character"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    <label className="btn-secondary w-full cursor-pointer justify-center px-3 py-2.5 text-center">
+                                        <Upload className="w-4 h-4 mr-2 shrink-0" />
                                         Upload
                                         <input
                                             type="file"
@@ -225,30 +221,13 @@ export default function CharactersPage() {
                                             }}
                                         />
                                     </label>
-                                    {character.imageCount > 0 && (
-                                        <button
-                                            onClick={() => trainModelMutation.mutate(character.id)}
-                                            disabled={trainModelMutation.isPending}
-                                            className="btn-secondary flex-1 text-center"
-                                        >
-                                            <Cpu className="w-4 h-4 mr-2 inline-flex" />
-                                            Train
-                                        </button>
-                                    )}
                                     <Link
                                         href={`/dashboard/generate?characterId=${character.id}`}
-                                        className="btn-primary flex-1 text-center"
+                                        className="btn-primary w-full justify-center px-3 py-2.5 text-center"
                                     >
-                                        <Sparkles className="w-4 h-4 mr-2 inline-flex" />
+                                        <Sparkles className="w-4 h-4 mr-2 shrink-0" />
                                         Use
                                     </Link>
-                                    <button
-                                        onClick={() => setDeleteTarget(character)}
-                                        className="btn-secondary px-3 text-red-400 hover:text-red-300 hover:border-red-500/30"
-                                        title="Delete character"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
                                 </div>
                             </div>
                         </div>
