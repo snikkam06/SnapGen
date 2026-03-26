@@ -3,8 +3,9 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useApiToken } from './use-api-token';
+import { getBrowserApiBaseUrl } from '@/lib/api-base-url';
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = getBrowserApiBaseUrl();
 
 interface JobEvent {
   jobId: string;

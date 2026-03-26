@@ -1,17 +1,4 @@
-function getApiBaseUrl() {
-    // Browser traffic should stay same-origin and use the Next.js rewrite.
-    if (typeof window !== 'undefined') {
-        return '/api';
-    }
-
-    if (process.env.NEXT_PUBLIC_API_BASE_URL) {
-        return process.env.NEXT_PUBLIC_API_BASE_URL;
-    }
-
-    return process.env.API_SERVER_URL
-        ? `${process.env.API_SERVER_URL}/api`
-        : 'http://localhost:3001/api';
-}
+import { getApiBaseUrl } from './api-base-url';
 
 const API_BASE_URL = getApiBaseUrl();
 
