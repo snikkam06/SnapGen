@@ -23,8 +23,8 @@ async function main() {
         },
         {
             code: 'creator-monthly',
-            name: 'Creator',
-            monthlyPriceCents: 1999,
+            name: 'Creator Monthly',
+            monthlyPriceCents: 3200,
             monthlyCredits: 500,
             featuresJson: {
                 maxCharacters: 5,
@@ -35,9 +35,23 @@ async function main() {
             },
         },
         {
+            code: 'creator-yearly',
+            name: 'Creator Yearly',
+            monthlyPriceCents: 15000,
+            monthlyCredits: 6000,
+            featuresJson: {
+                maxCharacters: 5,
+                maxImagesPerJob: 4,
+                videoGeneration: true,
+                faceSwap: true,
+                priorityQueue: false,
+                billingInterval: 'year',
+            },
+        },
+        {
             code: 'pro-monthly',
-            name: 'Pro',
-            monthlyPriceCents: 4999,
+            name: 'Pro Monthly',
+            monthlyPriceCents: 7500,
             monthlyCredits: 2000,
             featuresJson: {
                 maxCharacters: 20,
@@ -48,9 +62,23 @@ async function main() {
             },
         },
         {
+            code: 'pro-yearly',
+            name: 'Pro Yearly',
+            monthlyPriceCents: 36000,
+            monthlyCredits: 24000,
+            featuresJson: {
+                maxCharacters: 20,
+                maxImagesPerJob: 8,
+                videoGeneration: true,
+                faceSwap: true,
+                priorityQueue: true,
+                billingInterval: 'year',
+            },
+        },
+        {
             code: 'business-monthly',
-            name: 'Business',
-            monthlyPriceCents: 14999,
+            name: 'Business Monthly',
+            monthlyPriceCents: 17000,
             monthlyCredits: 10000,
             featuresJson: {
                 maxCharacters: -1,
@@ -60,6 +88,22 @@ async function main() {
                 priorityQueue: true,
                 apiAccess: true,
                 whiteLabel: true,
+            },
+        },
+        {
+            code: 'business-yearly',
+            name: 'Business Yearly',
+            monthlyPriceCents: 80000,
+            monthlyCredits: 120000,
+            featuresJson: {
+                maxCharacters: -1,
+                maxImagesPerJob: 16,
+                videoGeneration: true,
+                faceSwap: true,
+                priorityQueue: true,
+                apiAccess: true,
+                whiteLabel: true,
+                billingInterval: 'year',
             },
         },
     ];

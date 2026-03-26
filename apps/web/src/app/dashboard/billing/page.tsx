@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
     Sparkles,
     ArrowRight,
@@ -40,13 +41,52 @@ interface SessionResponse {
     url: string;
 }
 
-const plans = [
-    { name: 'Creator', planCode: 'creator-monthly', price: '$19.99/mo', credits: '500', popular: true },
-    { name: 'Pro', planCode: 'pro-monthly', price: '$49.99/mo', credits: '2,000', popular: false },
-    { name: 'Business', planCode: 'business-monthly', price: '$149.99/mo', credits: '10,000', popular: false },
+interface PlanOption {
+    name: string;
+    monthlyCode: string;
+    yearlyCode: string;
+    monthlyPrice: string;
+    yearlyPrice: string;
+    yearlyMonthlyEquiv: string;
+    credits: string;
+    popular: boolean;
+}
+
+const plans: PlanOption[] = [
+    {
+        name: 'Creator',
+        monthlyCode: 'creator-monthly',
+        yearlyCode: 'creator-yearly',
+        monthlyPrice: '$32',
+        yearlyPrice: '$150',
+        yearlyMonthlyEquiv: '$12.50',
+        credits: '500',
+        popular: true,
+    },
+    {
+        name: 'Pro',
+        monthlyCode: 'pro-monthly',
+        yearlyCode: 'pro-yearly',
+        monthlyPrice: '$75',
+        yearlyPrice: '$360',
+        yearlyMonthlyEquiv: '$30',
+        credits: '2,000',
+        popular: false,
+    },
+    {
+        name: 'Business',
+        monthlyCode: 'business-monthly',
+        yearlyCode: 'business-yearly',
+        monthlyPrice: '$170',
+        yearlyPrice: '$800',
+        yearlyMonthlyEquiv: '$66.67',
+        credits: '10,000',
+        popular: false,
+    },
 ];
 
 export default function BillingPage() {
+    const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
     const tokenQuery = useApiToken();
     const { getToken, isReady, userId } = tokenQuery;
 
@@ -117,10 +157,38 @@ export default function BillingPage() {
 
             {/* Plan Options */}
             <div>
-                <h2 className="text-xl font-semibold mb-4">Upgrade Your Plan</h2>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-xl font-semibold">Upgrade Your Plan</h2>
+                    <div className="flex items-center gap-1 rounded-full bg-white/5 p-1">
+                        <button
+                            className={cn(
+                                'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
+                                billingInterval === 'monthly'
+                                    ? 'bg-purple-500 text-white'
+                                    : 'text-white/50 hover:text-white/80',
+                            )}
+                            onClick={() => setBillingInterval('monthly')}
+                        >
+                            Monthly
+                        </button>
+                        <button
+                            className={cn(
+                                'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
+                                billingInterval === 'yearly'
+                                    ? 'bg-purple-500 text-white'
+                                    : 'text-white/50 hover:text-white/80',
+                            )}
+                            onClick={() => setBillingInterval('yearly')}
+                        >
+                            Yearly
+                        </button>
+                    </div>
+                </div>
                 <div className="grid md:grid-cols-3 gap-4">
                     {plans.map((plan) => {
-                        const isCurrentPlan = currentPlan.code === plan.planCode;
+                        const planCode = billingInterval === 'yearly' ? plan.yearlyCode : plan.monthlyCode;
+                        const displayPrice = billingInterval === 'yearly' ? plan.yearlyMonthlyEquiv : plan.monthlyPrice;
+                        const isCurrentPlan = currentPlan.code === plan.monthlyCode || currentPlan.code === plan.yearlyCode;
                         return (
                             <div
                                 key={plan.name}
@@ -133,14 +201,17 @@ export default function BillingPage() {
                                     <span className="text-xs font-semibold text-purple-400 mb-2">RECOMMENDED</span>
                                 )}
                                 <h3 className="text-lg font-semibold">{plan.name}</h3>
-                                <p className="text-2xl font-bold mt-1">{plan.price}</p>
+                                <p className="text-2xl font-bold mt-1">{displayPrice}<span className="text-sm font-normal text-white/40">/mo</span></p>
+                                {billingInterval === 'yearly' && (
+                                    <p className="text-xs text-white/40 mt-1">Billed yearly at {plan.yearlyPrice}/yr</p>
+                                )}
                                 <p className="text-sm text-purple-400 mt-1">{plan.credits} credits/mo</p>
                                 <button
                                     className="btn-primary mt-4 text-sm"
                                     disabled={checkoutMutation.isPending || isCurrentPlan}
-                                    onClick={() => checkoutMutation.mutate(plan.planCode)}
+                                    onClick={() => checkoutMutation.mutate(planCode)}
                                 >
-                                    {checkoutMutation.isPending && checkoutMutation.variables === plan.planCode ? (
+                                    {checkoutMutation.isPending && checkoutMutation.variables === planCode ? (
                                         <>
                                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                                             Redirecting...

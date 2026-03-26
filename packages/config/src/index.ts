@@ -61,6 +61,9 @@ export const PLAN_CODES = {
     CREATOR: 'creator-monthly',
     PRO: 'pro-monthly',
     BUSINESS: 'business-monthly',
+    CREATOR_YEARLY: 'creator-yearly',
+    PRO_YEARLY: 'pro-yearly',
+    BUSINESS_YEARLY: 'business-yearly',
 } as const;
 
 // ─── Job status transitions ─────────────────────────

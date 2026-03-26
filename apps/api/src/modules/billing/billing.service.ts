@@ -41,18 +41,18 @@ export class BillingService {
         ? user.subscription.stripeCustomerId
         : undefined;
 
+    const stripePriceId = this.getStripePriceId(plan.code);
+    if (!stripePriceId) {
+      throw new InternalServerErrorException(`Stripe price not configured for plan: ${plan.code}`);
+    }
+
     const session = await this.stripe.checkout.sessions.create({
       mode: 'subscription',
       ...(stripeCustomerId ? { customer: stripeCustomerId } : { customer_email: user.email }),
       client_reference_id: user.id,
       line_items: [
         {
-          price_data: {
-            currency: 'usd',
-            product_data: { name: plan.name },
-            unit_amount: plan.monthlyPriceCents,
-            recurring: { interval: 'month' },
-          },
+          price: stripePriceId,
           quantity: 1,
         },
       ],
@@ -124,6 +124,18 @@ export class BillingService {
         createdAt: e.createdAt.toISOString(),
       })),
     };
+  }
+
+  private getStripePriceId(planCode: string): string | undefined {
+    const priceMap: Record<string, string | undefined> = {
+      'creator-monthly': process.env.STRIPE_PRICE_CREATOR_MONTHLY,
+      'creator-yearly': process.env.STRIPE_PRICE_CREATOR_YEARLY,
+      'pro-monthly': process.env.STRIPE_PRICE_PRO_MONTHLY,
+      'pro-yearly': process.env.STRIPE_PRICE_PRO_YEARLY,
+      'business-monthly': process.env.STRIPE_PRICE_BUSINESS_MONTHLY,
+      'business-yearly': process.env.STRIPE_PRICE_BUSINESS_YEARLY,
+    };
+    return priceMap[planCode];
   }
 
   private ensureBillingConfigured(): void {
