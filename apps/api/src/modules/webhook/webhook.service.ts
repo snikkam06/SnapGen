@@ -175,8 +175,16 @@ export class WebhookService {
     const stripeSubscriptionId =
       typeof session.subscription === 'string' ? session.subscription : null;
     if (!userId || !planCode || !stripeCustomerId || !stripeSubscriptionId) {
-      this.logger.warn('Stripe checkout session is missing subscription metadata');
+      this.logger.warn('Stripe checkout session is missing subscription metadata', {
+        userId, planCode, stripeCustomerId, stripeSubscriptionId,
+      });
       return;
+    }
+
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) {
+      this.logger.error(`Checkout webhook: user ${userId} not found in database`);
+      throw new Error(`User ${userId} not found — will retry`);
     }
 
     const plan = await tx.plan.findUnique({ where: { code: planCode } });
@@ -184,6 +192,16 @@ export class WebhookService {
       this.logger.warn(`Stripe checkout session referenced unknown plan ${planCode}`);
       return;
     }
+
+    // Check if credits were already granted for this subscription to avoid double-granting on retry
+    const existingGrant = await tx.creditLedger.findFirst({
+      where: {
+        userId,
+        entryType: 'monthly_grant',
+        reason: { contains: stripeSubscriptionId },
+      },
+      select: { id: true },
+    });
 
     await tx.subscription.upsert({
       where: { userId },
@@ -202,14 +220,16 @@ export class WebhookService {
       },
     });
 
-    await tx.creditLedger.create({
-      data: {
-        userId,
-        amount: plan.monthlyCredits,
-        entryType: 'monthly_grant',
-        reason: `${plan.name} plan subscription`,
-      },
-    });
+    if (!existingGrant) {
+      await tx.creditLedger.create({
+        data: {
+          userId,
+          amount: plan.monthlyCredits,
+          entryType: 'monthly_grant',
+          reason: `${plan.name} plan subscription (${stripeSubscriptionId})`,
+        },
+      });
+    }
   }
 
   private async handleInvoicePaid(tx: TransactionClient, invoice: Stripe.Invoice) {
