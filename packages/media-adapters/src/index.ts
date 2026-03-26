@@ -467,12 +467,10 @@ function formatFalLogs(status: FalQueueStatusResponse): string | undefined {
 }
 
 const FAL_MULTI_IMAGE_JOB_PREFIX = 'multi:';
+const FAL_MULTI_IMAGE_JOB_SEPARATOR = '|';
 
 function encodeFalMultiImageJobId(jobIds: string[]): string {
-  return `${FAL_MULTI_IMAGE_JOB_PREFIX}${Buffer.from(
-    JSON.stringify(jobIds),
-    'utf8',
-  ).toString('base64url')}`;
+  return `${FAL_MULTI_IMAGE_JOB_PREFIX}${jobIds.join(FAL_MULTI_IMAGE_JOB_SEPARATOR)}`;
 }
 
 function decodeFalMultiImageJobId(externalJobId: string): string[] | null {
@@ -483,6 +481,15 @@ function decodeFalMultiImageJobId(externalJobId: string): string[] | null {
   const encodedPayload = externalJobId.slice(FAL_MULTI_IMAGE_JOB_PREFIX.length);
   if (!encodedPayload) {
     return null;
+  }
+
+  if (encodedPayload.includes(FAL_MULTI_IMAGE_JOB_SEPARATOR)) {
+    const parsed = encodedPayload
+      .split(FAL_MULTI_IMAGE_JOB_SEPARATOR)
+      .map((jobId) => jobId.trim())
+      .filter((jobId) => jobId.length > 0);
+
+    return parsed.length > 0 ? parsed : null;
   }
 
   try {

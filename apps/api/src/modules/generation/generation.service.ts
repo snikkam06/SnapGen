@@ -53,6 +53,7 @@ type ProviderJobWebhookUpdate = {
   externalJobId: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   errorMessage?: string;
+  outputs?: Array<{ url: string; mimeType: string }>;
 };
 
 @Injectable()
@@ -488,10 +489,15 @@ export class GenerationService {
     retryable: boolean;
     reason: string;
   }> {
+    const encodedRequestIdFragment = `::${update.externalJobId}`;
     const genJob = await this.prisma.generationJob.findFirst({
       where: {
         provider: update.provider,
-        externalJobId: update.externalJobId,
+        OR: [
+          { externalJobId: update.externalJobId },
+          { externalJobId: { endsWith: encodedRequestIdFragment } },
+          { externalJobId: { contains: encodedRequestIdFragment } },
+        ],
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -535,7 +541,17 @@ export class GenerationService {
       };
     }
 
-    const providerResult = await this.resolveProviderWebhookResult(genJob);
+    const canUseWebhookOutputsDirectly =
+      update.status === 'completed'
+      && !!update.outputs?.length
+      && !(genJob.externalJobId || '').startsWith('multi:');
+
+    const providerResult = canUseWebhookOutputsDirectly
+      ? {
+          status: 'completed' as const,
+          outputs: update.outputs,
+        }
+      : await this.resolveProviderWebhookResult(genJob);
     if (providerResult.status === 'queued' || providerResult.status === 'running') {
       return {
         handled: false,

@@ -32,6 +32,7 @@ type NormalizedProviderWebhook = {
   externalJobId: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   errorMessage?: string;
+  outputs?: Array<{ url: string; mimeType: string }>;
 };
 
 const WEBHOOK_TIMESTAMP_TOLERANCE_SEC = 300;
@@ -288,6 +289,7 @@ export class WebhookService {
         externalJobId: normalized.externalJobId,
         status: normalized.status,
         errorMessage: normalized.errorMessage,
+        outputs: normalized.outputs,
       });
 
       if (result.retryable) {
@@ -369,9 +371,32 @@ export class WebhookService {
     }
 
     if (status === 'OK') {
+      const rawPayload = payload.payload;
+      const normalizedOutputs =
+        rawPayload && typeof rawPayload === 'object' && Array.isArray((rawPayload as { images?: unknown[] }).images)
+          ? (rawPayload as {
+              images: Array<{ url?: unknown; content_type?: unknown }>;
+            }).images
+              .map((image) => {
+                if (typeof image?.url !== 'string' || !image.url.trim()) {
+                  return null;
+                }
+
+                return {
+                  url: image.url,
+                  mimeType:
+                    typeof image.content_type === 'string' && image.content_type.trim()
+                      ? image.content_type
+                      : 'image/jpeg',
+                };
+              })
+              .filter((image): image is { url: string; mimeType: string } => image !== null)
+          : undefined;
+
       return {
         externalJobId: requestId,
         status: 'completed',
+        outputs: normalizedOutputs,
       };
     }
 

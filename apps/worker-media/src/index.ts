@@ -164,7 +164,7 @@ function parsePositiveInt(value: string | undefined, defaultVal: number, name: s
 
 const PROVIDER_WEBHOOK_FALLBACK_DELAY_MS = parsePositiveInt(
   process.env.PROVIDER_WEBHOOK_FALLBACK_DELAY_MS,
-  30000,
+  5000,
   'PROVIDER_WEBHOOK_FALLBACK_DELAY_MS',
 );
 
