@@ -56,7 +56,8 @@ export class AssetService {
   ) {}
 
   async findAll(clerkUserId: string, params?: AssetListParams) {
-    const user = await this.prisma.reader.user.findUnique({ where: { clerkUserId } });
+    // Newly generated assets should appear immediately after job completion.
+    const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
     const page = Math.max(1, params?.page || 1);
@@ -69,7 +70,7 @@ export class AssetService {
     if (params?.kind) where.kind = params.kind;
 
     const [items, total] = await Promise.all([
-      this.prisma.reader.asset.findMany({
+      this.prisma.asset.findMany({
         where,
         orderBy: { createdAt: sort === 'oldest' ? 'asc' : 'desc' },
         skip: (page - 1) * limit,
@@ -102,7 +103,7 @@ export class AssetService {
           },
         },
       }),
-      this.prisma.reader.asset.count({ where }),
+      this.prisma.asset.count({ where }),
     ]);
 
     const data = await Promise.all(items.map((item) => this.serializeAsset(item)));

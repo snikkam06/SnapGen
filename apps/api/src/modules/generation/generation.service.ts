@@ -22,6 +22,9 @@ const INLINE_PROCESSING_ENABLED = process.env.SNAPGEN_INLINE_PROCESSING === 'tru
 const MAX_PENDING_JOBS_PER_USER = Number(process.env.MAX_PENDING_JOBS_PER_USER) || 5;
 const QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS = 15_000;
 const QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS = 15_000;
+const RUNNING_IMAGE_JOB_RECONCILE_THRESHOLD_MS = 20_000;
+const RUNNING_VIDEO_JOB_RECONCILE_THRESHOLD_MS = 45_000;
+const RUNNING_FACESWAP_JOB_RECONCILE_THRESHOLD_MS = 20_000;
 
 const MINOR_BLOCKLIST_PATTERNS = [
   /\b(?:child|children|kid|kids|infant|toddler|baby)\b/i,
@@ -905,6 +908,63 @@ export class GenerationService {
     }
   }
 
+  async reconcileRunningJob(jobId: string): Promise<void> {
+    const genJob = await this.prisma.generationJob.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!genJob || genJob.status !== 'running' || !genJob.externalJobId) {
+      return;
+    }
+
+    if (!this.shouldReconcileRunningJob(genJob)) {
+      return;
+    }
+
+    try {
+      const providerResult = await this.resolveProviderWebhookResult(genJob);
+
+      if (providerResult.status === 'queued' || providerResult.status === 'running') {
+        return;
+      }
+
+      if (providerResult.status === 'failed') {
+        await this.failJob(
+          genJob.id,
+          genJob.userId,
+          providerResult.errorMessage || `${genJob.provider} reported job failure`,
+          this.getRefundReasonForJob(genJob, 'running job reconciliation failure'),
+        );
+        return;
+      }
+
+      if (providerResult.status !== 'completed') {
+        return;
+      }
+
+      const outputs = 'outputs' in providerResult ? providerResult.outputs ?? [] : [];
+      if (outputs.length === 0) {
+        await this.failJob(
+          genJob.id,
+          genJob.userId,
+          'Generation completed without any outputs',
+          this.getRefundReasonForJob(genJob, 'running job reconciliation failure'),
+        );
+        return;
+      }
+
+      await this.completeJobWithOutputs(
+        genJob,
+        outputs,
+        genJob.jobType === 'video' ? 'generated-video' : 'generated-image',
+        genJob.jobType === 'video' ? 'mp4' : 'png',
+        genJob.externalJobId,
+      );
+    } catch (error) {
+      console.warn(`[GenerationService] Failed to reconcile running job ${jobId}.`, error);
+    }
+  }
+
   async dispatchQueuedJob(jobId: string): Promise<boolean> {
     const job = await this.prisma.generationJob.findUnique({
       where: { id: jobId },
@@ -1316,6 +1376,22 @@ export class GenerationService {
     };
 
     return extensionMap[mimeType] || fallback;
+  }
+
+  private shouldReconcileRunningJob(
+    genJob: Pick<GenerationJob, 'jobType' | 'createdAt' | 'startedAt'>,
+  ): boolean {
+    const startedAtMs = genJob.startedAt?.getTime() ?? genJob.createdAt.getTime();
+    const elapsedMs = Date.now() - startedAtMs;
+
+    switch (genJob.jobType) {
+      case 'video':
+        return elapsedMs >= RUNNING_VIDEO_JOB_RECONCILE_THRESHOLD_MS;
+      case 'faceswap-image':
+        return elapsedMs >= RUNNING_FACESWAP_JOB_RECONCILE_THRESHOLD_MS;
+      default:
+        return elapsedMs >= RUNNING_IMAGE_JOB_RECONCILE_THRESHOLD_MS;
+    }
   }
 
   private getVideoProvider(): string {
