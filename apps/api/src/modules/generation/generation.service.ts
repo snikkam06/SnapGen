@@ -409,8 +409,6 @@ export class GenerationService {
     const genJob = await this.claimQueuedFaceSwapJob(jobId);
     if (!genJob) return;
 
-    let savedOutputs: SavedJobOutput[] = [];
-
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
       const adapter = createFaceSwapAdapter(
@@ -445,7 +443,6 @@ export class GenerationService {
         createdJob.externalJobId,
       );
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
@@ -917,6 +914,10 @@ export class GenerationService {
       return;
     }
 
+    if (!this.supportsCrossProcessRunningJobReconciliation(genJob)) {
+      return;
+    }
+
     if (!this.shouldReconcileRunningJob(genJob)) {
       return;
     }
@@ -1198,8 +1199,6 @@ export class GenerationService {
       return;
     }
 
-    let savedOutputs: SavedJobOutput[] = [];
-
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
       const adapter = createImageAdapter(
@@ -1243,7 +1242,6 @@ export class GenerationService {
         createdJob.externalJobId,
       );
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
@@ -1394,6 +1392,23 @@ export class GenerationService {
     }
   }
 
+  private supportsCrossProcessRunningJobReconciliation(
+    genJob: Pick<GenerationJob, 'jobType' | 'provider'>,
+  ): boolean {
+    // Google image generation is executed inline inside the worker process and
+    // tracks intermediate job state in adapter memory only. Polling it from a
+    // different API/worker process will incorrectly report "result unavailable"
+    // and can fail a healthy job mid-flight.
+    if (
+      genJob.jobType === 'image'
+      && (genJob.provider === 'google' || genJob.provider === 'gemini')
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
   private getVideoProvider(): string {
     if (process.env.VIDEO_PROVIDER) {
       return process.env.VIDEO_PROVIDER;
@@ -1454,8 +1469,6 @@ export class GenerationService {
     const genJob = await this.claimQueuedVideoJob(jobId);
     if (!genJob) return;
 
-    let savedOutputs: SavedJobOutput[] = [];
-
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
       const adapter = createVideoAdapter(
@@ -1496,7 +1509,6 @@ export class GenerationService {
         createdJob.externalJobId,
       );
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
