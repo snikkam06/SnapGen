@@ -202,6 +202,7 @@ const FAL_DEFAULT_NEGATIVE_PROMPT =
   'child, children, minor, underage, teenager, teen, young girl, young boy, infant, toddler, kid, under 18, petite young, baby face, childlike, youthful face, adolescent, prepubescent, small frame child, schoolgirl, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
+const FAL_STATUS_HANDLE_PREFIX = 'fal-status:';
 const FAL_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const FAL_TARGET_UPLOAD_BYTES = Math.floor(FAL_MAX_UPLOAD_BYTES * 0.9);
 const FAL_OPTIMIZED_IMAGE_CONTENT_TYPE = 'image/webp';
@@ -327,6 +328,38 @@ function buildFalQueueResponseUrl(endpointPath: string, requestId: string): stri
   return `${FAL_QUEUE_BASE_URL}/${trimSlashes(endpointPath)}/requests/${requestId}`;
 }
 
+function encodeFalStatusHandle(statusUrl: string, requestId: string): string {
+  return `${FAL_STATUS_HANDLE_PREFIX}${Buffer.from(statusUrl, 'utf8').toString('base64url')}::${requestId}`;
+}
+
+function decodeFalStatusHandle(
+  externalJobId: string,
+): { statusUrl: string; requestId: string } | null {
+  if (!externalJobId.startsWith(FAL_STATUS_HANDLE_PREFIX)) {
+    return null;
+  }
+
+  const separatorIndex = externalJobId.lastIndexOf('::');
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  const encodedStatusUrl = externalJobId.slice(FAL_STATUS_HANDLE_PREFIX.length, separatorIndex);
+  const requestId = externalJobId.slice(separatorIndex + 2);
+  if (!encodedStatusUrl || !requestId) {
+    return null;
+  }
+
+  try {
+    return {
+      statusUrl: Buffer.from(encodedStatusUrl, 'base64url').toString('utf8'),
+      requestId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function resolveFalQueueUrls(
   endpointPath: string,
   externalJobId: string,
@@ -336,6 +369,17 @@ function resolveFalQueueUrls(
   responseUrl: string;
   statusUrl: string;
 } {
+  const encodedHandle = decodeFalStatusHandle(externalJobId);
+  if (encodedHandle) {
+    const responseUrl = encodedHandle.statusUrl.replace(/\/status(?:\?.*)?\/?$/, '');
+    return {
+      endpointPath: resolvedEndpointPathFromUrl(responseUrl) ?? trimSlashes(endpointPath),
+      requestId: encodedHandle.requestId,
+      responseUrl,
+      statusUrl: encodedHandle.statusUrl,
+    };
+  }
+
   let resolvedEndpointPath = trimSlashes(endpointPath);
   let rawJobId = externalJobId;
   const separatorIndex = externalJobId.indexOf('::');
@@ -384,6 +428,21 @@ function resolveFalQueueUrls(
     responseUrl,
     statusUrl: `${responseUrl}/status`,
   };
+}
+
+function resolvedEndpointPathFromUrl(urlString: string): string | null {
+  try {
+    const parsed = new URL(urlString);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const requestsIndex = segments.indexOf('requests');
+    if (requestsIndex <= 0) {
+      return null;
+    }
+
+    return trimSlashes(segments.slice(0, requestsIndex).join('/')) || null;
+  } catch {
+    return null;
+  }
 }
 
 async function getFalQueueStatus(
@@ -1203,7 +1262,7 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
   private apiKey: string;
   private textToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/text-to-video';
   private imageToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/image-to-video';
-  private queueEndpointPath = 'fal-ai/kling-video/v3/standard';
+  private queueEndpointPath = 'fal-ai/kling-video';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -1247,10 +1306,10 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     }
 
     return {
-      externalJobId: this.encodeExternalJobId(
-        endpointPath,
-        data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
-      ),
+      externalJobId:
+        data.status_url && data.request_id
+          ? encodeFalStatusHandle(data.status_url, data.request_id)
+          : data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
       status,
     };
   }
@@ -1356,11 +1415,22 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
   }
 
   private getExternalJobIdCandidates(externalJobId: string): string[] {
+    const statusHandle = decodeFalStatusHandle(externalJobId);
+    if (statusHandle) {
+      return [externalJobId, statusHandle.requestId];
+    }
+
     if (
       externalJobId.includes('::')
       || externalJobId.startsWith('http://')
       || externalJobId.startsWith('https://')
     ) {
+      const separatorIndex = externalJobId.indexOf('::');
+      if (separatorIndex !== -1) {
+        const requestId = externalJobId.slice(separatorIndex + 2);
+        return [externalJobId, requestId];
+      }
+
       return [externalJobId];
     }
 
