@@ -13,9 +13,9 @@ function isSupabaseDirectHost(hostname) {
 }
 
 function assertValidDirectDatabaseUrl(parsed) {
-    if (isSupabasePoolerHost(parsed.hostname)) {
+    if (isSupabasePoolerHost(parsed.hostname) && parsed.port && parsed.port !== '5432') {
         throw new Error(
-            `DIRECT_URL points to the Supabase pooler host (${parsed.hostname}). Use the direct database host (db.<project-ref>.supabase.co:5432) for migrations.`,
+            `DIRECT_URL points to the Supabase pooler host (${parsed.hostname}) on port ${parsed.port}. Use the session pooler on port 5432 for IPv4 migrations, or the direct database host on port 5432 when IPv6 direct access is available.`,
         );
     }
 
