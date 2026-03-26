@@ -607,8 +607,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     errorMessage?: string;
   }> {
     try {
-      const { jobId } = this.decodeExternalJobId(externalJobId);
-      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, jobId);
+      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -625,7 +624,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
         this.queueEndpointPath,
-        jobId,
+        externalJobId,
         status.response_url,
       );
       const responseBody =
@@ -694,28 +693,6 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     }
 
     return `${endpointPath}::${jobId}`;
-  }
-
-  private decodeExternalJobId(externalJobId: string): { endpointPath: string; jobId: string } {
-    if (externalJobId.startsWith('http://') || externalJobId.startsWith('https://')) {
-      return {
-        endpointPath: this.textSubmitEndpointPath,
-        jobId: externalJobId,
-      };
-    }
-
-    const separatorIndex = externalJobId.indexOf('::');
-    if (separatorIndex === -1) {
-      return {
-        endpointPath: this.textSubmitEndpointPath,
-        jobId: externalJobId,
-      };
-    }
-
-    return {
-      endpointPath: externalJobId.slice(0, separatorIndex),
-      jobId: externalJobId.slice(separatorIndex + 2),
-    };
   }
 
   private mapAspectRatio(ratio?: string): string {
@@ -1270,7 +1247,10 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     }
 
     return {
-      externalJobId: data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
+      externalJobId: this.encodeExternalJobId(
+        endpointPath,
+        data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
+      ),
       status,
     };
   }
@@ -1280,55 +1260,64 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string; durationSec?: number }>;
     errorMessage?: string;
   }> {
-    try {
-      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
-      const mappedStatus = mapFalStatus(status.status);
-      const logSummary = formatFalLogs(status);
+    let lastError: unknown;
 
-      if (mappedStatus !== 'completed') {
+    for (const candidateJobId of this.getExternalJobIdCandidates(externalJobId)) {
+      try {
+        const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, candidateJobId);
+        const mappedStatus = mapFalStatus(status.status);
+        const logSummary = formatFalLogs(status);
+
+        if (mappedStatus !== 'completed') {
+          return {
+            status: mappedStatus,
+            errorMessage: status.error || logSummary,
+          };
+        }
+
+        const inlineResponse = extractFalResponse<FalVideoResponse>(
+          status as unknown as Record<string, unknown>,
+        );
+        const result = await getFalQueueResult<FalVideoResponse>(
+          this.apiKey,
+          this.queueEndpointPath,
+          candidateJobId,
+          status.response_url,
+        );
+        const responseBody =
+          inlineResponse ??
+          extractFalResponse<FalVideoResponse>(result as unknown as Record<string, unknown>);
+        const video = responseBody?.video;
+
+        if (!video?.url) {
+          return {
+            status: 'failed',
+            errorMessage:
+              result.error || status.error || logSummary || 'Fal video job returned no output video',
+          };
+        }
+
         return {
-          status: mappedStatus,
-          errorMessage: status.error || logSummary,
+          status: 'completed',
+          outputs: [
+            {
+              url: video.url,
+              mimeType: video.content_type || 'video/mp4',
+            },
+          ],
         };
+      } catch (error) {
+        lastError = error;
+        if (!this.shouldRetryWithAlternateEndpoint(error)) {
+          break;
+        }
       }
-
-      const inlineResponse = extractFalResponse<FalVideoResponse>(
-        status as unknown as Record<string, unknown>,
-      );
-      const result = await getFalQueueResult<FalVideoResponse>(
-        this.apiKey,
-        this.queueEndpointPath,
-        externalJobId,
-        status.response_url,
-      );
-      const responseBody =
-        inlineResponse ??
-        extractFalResponse<FalVideoResponse>(result as unknown as Record<string, unknown>);
-      const video = responseBody?.video;
-
-      if (!video?.url) {
-        return {
-          status: 'failed',
-          errorMessage:
-            result.error || status.error || logSummary || 'Fal video job returned no output video',
-        };
-      }
-
-      return {
-        status: 'completed',
-        outputs: [
-          {
-            url: video.url,
-            mimeType: video.content_type || 'video/mp4',
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : 'Failed to fetch Fal video job',
-      };
     }
+
+    return {
+      status: 'failed',
+      errorMessage: lastError instanceof Error ? lastError.message : 'Failed to fetch Fal video job',
+    };
   }
 
   private normalizeAspectRatio(ratio?: string): string {
@@ -1356,6 +1345,34 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     }
 
     return `${prompt}\n\n${cameraPrompt}`;
+  }
+
+  private encodeExternalJobId(endpointPath: string, jobId: string): string {
+    if (jobId.startsWith('http://') || jobId.startsWith('https://')) {
+      return jobId;
+    }
+
+    return `${endpointPath}::${jobId}`;
+  }
+
+  private getExternalJobIdCandidates(externalJobId: string): string[] {
+    if (
+      externalJobId.includes('::')
+      || externalJobId.startsWith('http://')
+      || externalJobId.startsWith('https://')
+    ) {
+      return [externalJobId];
+    }
+
+    return [
+      this.encodeExternalJobId(this.imageToVideoSubmitEndpointPath, externalJobId),
+      this.encodeExternalJobId(this.textToVideoSubmitEndpointPath, externalJobId),
+      externalJobId,
+    ];
+  }
+
+  private shouldRetryWithAlternateEndpoint(error: unknown): boolean {
+    return error instanceof Error && /Fal status error: (404|405)\b/.test(error.message);
   }
 }
 
@@ -1583,7 +1600,10 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       throw new Error('Fal face swap job failed to start');
     }
 
-    const externalJobId = data.request_id ?? data.response_url ?? `fal-faceswap-${Date.now()}`;
+    const externalJobId = this.encodeExternalJobId(
+      this.editEndpointPath,
+      data.request_id ?? data.response_url ?? `fal-faceswap-${Date.now()}`,
+    );
 
     return {
       externalJobId,
@@ -1644,6 +1664,14 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
         errorMessage: error instanceof Error ? error.message : 'Failed to fetch Fal face swap job',
       };
     }
+  }
+
+  private encodeExternalJobId(endpointPath: string, jobId: string): string {
+    if (jobId.startsWith('http://') || jobId.startsWith('https://')) {
+      return jobId;
+    }
+
+    return `${endpointPath}::${jobId}`;
   }
 }
 
