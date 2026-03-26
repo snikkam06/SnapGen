@@ -30,8 +30,14 @@ export class WebhookController {
     const rawBody = req.rawBody;
     if (!rawBody) throw new BadRequestException('Missing raw body');
     if (!signature) throw new BadRequestException('Missing Stripe signature');
-    await this.webhookService.handleStripeWebhook(rawBody, signature);
-    return { received: true };
+    try {
+      await this.webhookService.handleStripeWebhook(rawBody, signature);
+      return { received: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Stripe webhook error:', message, error instanceof Error ? error.stack : '');
+      throw error;
+    }
   }
 
   @Post('provider/:provider')
