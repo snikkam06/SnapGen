@@ -61,8 +61,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </SignedOut>
       <SignedIn>
         <Providers>
-          <AuthSync />
-          <DashboardShell>{children}</DashboardShell>
+          <AuthSync>
+            <DashboardShell>{children}</DashboardShell>
+          </AuthSync>
         </Providers>
       </SignedIn>
     </>
