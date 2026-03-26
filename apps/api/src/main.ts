@@ -60,8 +60,13 @@ async function bootstrap() {
     // Security headers
     app.use(helmet());
 
-    // Increase body size limit for file uploads
-    app.use(json({ limit: '50mb' }));
+    // Increase body size limit for file uploads (preserve raw body for webhook signature verification)
+    app.use(json({
+      limit: '50mb',
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }));
 
     // Global prefix
     app.setGlobalPrefix('api');
