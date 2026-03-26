@@ -55,15 +55,18 @@ async function bootstrap() {
     }
 
     const { AppModule } = await import('./app.module');
-    const app = await NestFactory.create(AppModule, { rawBody: true });
+    const app = await NestFactory.create(AppModule, {
+      bodyParser: false,
+      rawBody: true,
+    });
 
     // Security headers
     app.use(helmet());
 
-    // Increase body size limit for file uploads (preserve raw body for webhook signature verification)
+    // Custom body parser that preserves the raw body for webhook signature verification
     app.use(json({
       limit: '50mb',
-      verify: (req: any, _res, buf) => {
+      verify: (req: any, _res, buf: Buffer) => {
         req.rawBody = buf;
       },
     }));
