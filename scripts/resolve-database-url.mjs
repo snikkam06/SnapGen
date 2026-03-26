@@ -35,15 +35,16 @@ const envPathCandidates = [
     path.join(repoRoot, '.env'),
     path.join(repoRoot, 'apps/api/.env'),
 ];
+const databaseUrlFromEnv = process.env.DATABASE_URL?.trim();
 const envPath = envPathCandidates.find((candidatePath) => fs.existsSync(candidatePath));
 
-if (!envPath) {
+if (!databaseUrlFromEnv && !envPath) {
     throw new Error(
-        `DATABASE_URL env file not found. Checked: ${envPathCandidates.join(', ')}`,
+        `DATABASE_URL is not set and no env file was found. Checked: ${envPathCandidates.join(', ')}`,
     );
 }
 
-const databaseUrl = process.env.DATABASE_URL
+const databaseUrl = databaseUrlFromEnv
     || (() => {
         const envContents = fs.readFileSync(envPath, 'utf8');
         const databaseUrlLine = envContents
@@ -54,11 +55,15 @@ const databaseUrl = process.env.DATABASE_URL
             throw new Error(`DATABASE_URL not found in ${envPath}`);
         }
 
-        return databaseUrlLine.slice('DATABASE_URL='.length);
+        return databaseUrlLine.slice('DATABASE_URL='.length).trim();
     })();
 
-if (!databaseUrl.trim()) {
-    throw new Error(`DATABASE_URL is empty in ${envPath}`);
+if (!databaseUrl) {
+    if (envPath) {
+        throw new Error(`DATABASE_URL is empty in ${envPath}`);
+    }
+
+    throw new Error('DATABASE_URL is empty');
 }
 const parsed = new URL(databaseUrl);
 assertValidRuntimeDatabaseUrl(parsed);
