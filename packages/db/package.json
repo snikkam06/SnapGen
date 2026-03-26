@@ -6,9 +6,9 @@
     "types": "./src/index.ts",
     "scripts": {
         "db:generate": "prisma generate",
-        "db:push": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- prisma db push",
-        "db:migrate:deploy": "node ../../scripts/with-direct-url.mjs dotenv -e ../../.env -- prisma migrate deploy",
-        "db:seed": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- tsx src/seed.ts",
+        "db:push": "node ../../scripts/with-database-url.mjs prisma db push",
+        "db:migrate:deploy": "node ../../scripts/with-direct-url.mjs prisma migrate deploy",
+        "db:seed": "node ../../scripts/with-database-url.mjs tsx src/seed.ts",
         "build": "pnpm db:generate && tsc",
         "clean": "rm -rf dist",
         "typecheck": "pnpm db:generate && tsc --noEmit",

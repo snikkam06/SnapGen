@@ -48,11 +48,13 @@ const envPathCandidates = [
     path.join(repoRoot, '.env'),
     path.join(repoRoot, 'apps/api/.env'),
 ];
+const directUrlFromEnv = process.env.DIRECT_URL?.trim();
 const envPath = envPathCandidates.find((candidatePath) => fs.existsSync(candidatePath));
 const localClusterPath = path.join(repoRoot, '.local/postgres/PG_VERSION');
 
 const databaseUrl = readEnvValue(envPath, 'DATABASE_URL');
-const directUrl = readEnvValue(envPath, 'DIRECT_URL')
+const directUrl = directUrlFromEnv
+    || readEnvValue(envPath, 'DIRECT_URL')
     || (() => {
         if (!databaseUrl?.trim()) {
             return undefined;
@@ -70,7 +72,7 @@ const directUrl = readEnvValue(envPath, 'DIRECT_URL')
 
 if (!directUrl?.trim()) {
     throw new Error(
-        `DIRECT_URL env file not found or empty. Checked: ${envPathCandidates.join(', ')}`,
+        `DIRECT_URL is not set and no usable fallback was found. Checked: ${envPathCandidates.join(', ')}`,
     );
 }
 
