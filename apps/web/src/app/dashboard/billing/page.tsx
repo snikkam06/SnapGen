@@ -54,6 +54,16 @@ interface PlanOption {
 
 const plans: PlanOption[] = [
     {
+        name: 'Basic',
+        monthlyCode: 'basic-monthly',
+        yearlyCode: 'basic-yearly',
+        monthlyPrice: '$10',
+        yearlyPrice: '$50',
+        yearlyMonthlyEquiv: '$4.17',
+        credits: '2,000',
+        popular: false,
+    },
+    {
         name: 'Creator',
         monthlyCode: 'creator-monthly',
         yearlyCode: 'creator-yearly',
@@ -184,7 +194,7 @@ export default function BillingPage() {
                         </button>
                     </div>
                 </div>
-                <div className="grid md:grid-cols-3 gap-4">
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
                     {plans.map((plan) => {
                         const planCode = billingInterval === 'yearly' ? plan.yearlyCode : plan.monthlyCode;
                         const displayPrice = billingInterval === 'yearly' ? plan.yearlyMonthlyEquiv : plan.monthlyPrice;

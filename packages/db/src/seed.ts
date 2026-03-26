@@ -22,6 +22,33 @@ async function main() {
             },
         },
         {
+            code: 'basic-monthly',
+            name: 'Basic Monthly',
+            monthlyPriceCents: 1000,
+            monthlyCredits: 2000,
+            featuresJson: {
+                maxCharacters: 3,
+                maxImagesPerJob: 2,
+                videoGeneration: true,
+                faceSwap: false,
+                priorityQueue: false,
+            },
+        },
+        {
+            code: 'basic-yearly',
+            name: 'Basic Yearly',
+            monthlyPriceCents: 5000,
+            monthlyCredits: 24000,
+            featuresJson: {
+                maxCharacters: 3,
+                maxImagesPerJob: 2,
+                videoGeneration: true,
+                faceSwap: false,
+                priorityQueue: false,
+                billingInterval: 'year',
+            },
+        },
+        {
             code: 'creator-monthly',
             name: 'Creator Monthly',
             monthlyPriceCents: 3200,

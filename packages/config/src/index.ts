@@ -58,9 +58,11 @@ export const STORAGE_BUCKETS = {
 // ─── Subscription plan codes ─────────────────────────
 export const PLAN_CODES = {
     FREE: 'free',
+    BASIC: 'basic-monthly',
     CREATOR: 'creator-monthly',
     PRO: 'pro-monthly',
     BUSINESS: 'business-monthly',
+    BASIC_YEARLY: 'basic-yearly',
     CREATOR_YEARLY: 'creator-yearly',
     PRO_YEARLY: 'pro-yearly',
     BUSINESS_YEARLY: 'business-yearly',

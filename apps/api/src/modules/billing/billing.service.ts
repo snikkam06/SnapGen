@@ -128,6 +128,8 @@ export class BillingService {
 
   private getStripePriceId(planCode: string): string | undefined {
     const priceMap: Record<string, string | undefined> = {
+      'basic-monthly': process.env.STRIPE_PRICE_BASIC_MONTHLY,
+      'basic-yearly': process.env.STRIPE_PRICE_BASIC_YEARLY,
       'creator-monthly': process.env.STRIPE_PRICE_CREATOR_MONTHLY,
       'creator-yearly': process.env.STRIPE_PRICE_CREATOR_YEARLY,
       'pro-monthly': process.env.STRIPE_PRICE_PRO_MONTHLY,

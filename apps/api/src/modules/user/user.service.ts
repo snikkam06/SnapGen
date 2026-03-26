@@ -58,6 +58,8 @@ export class UserService {
     private getPlanName(code: string): string {
         const names: Record<string, string> = {
             free: 'Free',
+            'basic-monthly': 'Basic',
+            'basic-yearly': 'Basic',
             'creator-monthly': 'Creator',
             'creator-yearly': 'Creator',
             'pro-monthly': 'Pro',
