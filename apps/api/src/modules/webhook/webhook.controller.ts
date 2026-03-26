@@ -9,12 +9,14 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { WebhookService } from './webhook.service';
 import { Request } from 'express';
 
 const ALLOWED_PROVIDERS = new Set(['fal', 'replicate']);
 
 @ApiTags('webhooks')
+@SkipThrottle()
 @Controller('v1/webhooks')
 export class WebhookController {
   constructor(private webhookService: WebhookService) {}
