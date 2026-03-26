@@ -7,7 +7,7 @@
     "scripts": {
         "db:generate": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- prisma generate",
         "db:push": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- prisma db push",
-        "db:migrate:deploy": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- prisma migrate deploy",
+        "db:migrate:deploy": "node ../../scripts/with-direct-url.mjs dotenv -e ../../.env -- prisma migrate deploy",
         "db:seed": "node ../../scripts/with-database-url.mjs dotenv -e ../../.env -- tsx src/seed.ts",
         "build": "pnpm db:generate && tsc",
         "clean": "rm -rf dist",

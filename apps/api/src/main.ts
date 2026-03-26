@@ -1,7 +1,10 @@
 import net from 'node:net';
+import { hasRemoteStorageConfig, isProductionRuntime } from '@snapgen/config';
 import { loadApiEnv } from './env/load-env';
+import { captureApiException, flushApiSentry, initApiSentry } from './observability/sentry';
 
 loadApiEnv();
+initApiSentry();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -32,9 +35,23 @@ async function isRedisReachable(redisUrl?: string): Promise<boolean> {
 
 async function bootstrap() {
     if (!(await isRedisReachable(process.env.REDIS_URL))) {
+        if (isProductionRuntime()) {
+            console.error(
+                'FATAL: Redis is unavailable. Production API cannot fall back to inline processing.',
+            );
+            process.exit(1);
+        }
+
         process.env.SNAPGEN_DISABLE_QUEUE = 'true';
         process.env.SNAPGEN_INLINE_PROCESSING = 'true';
         console.warn('Redis is unavailable. Running API with inline media processing.');
+    }
+
+    if (isProductionRuntime() && !hasRemoteStorageConfig(process.env)) {
+        console.error(
+            'FATAL: Cloudflare R2 object storage must be configured in production.',
+        );
+        process.exit(1);
     }
 
     const { AppModule } = await import('./app.module');
@@ -99,4 +116,9 @@ async function bootstrap() {
     }
 }
 
-bootstrap();
+bootstrap().catch(async (error) => {
+    captureApiException(error, { phase: 'bootstrap' });
+    console.error('FATAL: Failed to start API', error);
+    await flushApiSentry();
+    process.exit(1);
+});

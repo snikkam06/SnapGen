@@ -48,6 +48,12 @@ type SavedJobOutput = {
   sizeBytes: number;
   providerUrl: string;
 };
+type ProviderJobWebhookUpdate = {
+  provider: string;
+  externalJobId: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  errorMessage?: string;
+};
 
 @Injectable()
 export class GenerationService {
@@ -427,26 +433,13 @@ export class GenerationService {
         throw new Error('Face swap completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-image',
         'png',
+        createdJob.externalJobId,
       );
-
-      const completedJob = await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        return tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
-      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
@@ -488,6 +481,247 @@ export class GenerationService {
       status: 'failed',
       errorMessage: 'Timed out waiting for face swap to complete',
     };
+  }
+
+  async handleProviderJobWebhook(update: ProviderJobWebhookUpdate): Promise<{
+    handled: boolean;
+    retryable: boolean;
+    reason: string;
+  }> {
+    const genJob = await this.prisma.generationJob.findFirst({
+      where: {
+        provider: update.provider,
+        externalJobId: update.externalJobId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!genJob) {
+      return {
+        handled: false,
+        retryable: update.status === 'completed' || update.status === 'failed',
+        reason: `No generation job found for ${update.provider}:${update.externalJobId}`,
+      };
+    }
+
+    if (['completed', 'failed', 'canceled'].includes(genJob.status)) {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Job ${genJob.id} already reached terminal status ${genJob.status}`,
+      };
+    }
+
+    if (update.status === 'queued' || update.status === 'running') {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Ignoring non-terminal ${update.provider} webhook for job ${genJob.id}`,
+      };
+    }
+
+    if (update.status === 'failed') {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        update.errorMessage || `${update.provider} reported job failure`,
+        this.getRefundReasonForJob(genJob, 'provider webhook failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed from provider webhook`,
+      };
+    }
+
+    const providerResult = await this.resolveProviderWebhookResult(genJob);
+    if (providerResult.status === 'queued' || providerResult.status === 'running') {
+      return {
+        handled: false,
+        retryable: true,
+        reason: `Provider result for job ${genJob.id} is still ${providerResult.status}`,
+      };
+    }
+
+    if (providerResult.status === 'failed') {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        providerResult.errorMessage || 'Generation completed without any outputs',
+        this.getRefundReasonForJob(genJob, 'provider webhook completion failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed after provider webhook lookup`,
+      };
+    }
+
+    if (providerResult.status !== 'completed') {
+      return {
+        handled: false,
+        retryable: true,
+        reason: `Provider result for job ${genJob.id} did not reach a terminal completion state`,
+      };
+    }
+
+    const outputs = providerResult.outputs ?? [];
+    if (outputs.length === 0) {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        'Generation completed without any outputs',
+        this.getRefundReasonForJob(genJob, 'provider webhook completion failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed after empty provider webhook result`,
+      };
+    }
+
+    const completedJob = await this.completeJobWithOutputs(
+      genJob,
+      outputs,
+      genJob.jobType === 'video' ? 'generated-video' : 'generated-image',
+      genJob.jobType === 'video' ? 'mp4' : 'png',
+      genJob.externalJobId || update.externalJobId,
+    );
+
+    if (!completedJob) {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Job ${genJob.id} was finalized by another worker before webhook completion`,
+      };
+    }
+
+    return {
+      handled: true,
+      retryable: false,
+      reason: `Completed job ${genJob.id} from provider webhook`,
+    };
+  }
+
+  private async resolveProviderWebhookResult(
+    genJob: GenerationJob,
+  ): Promise<
+    | { status: 'queued' | 'running' }
+    | {
+        status: 'completed' | 'failed';
+        outputs?: Array<{ url: string; mimeType: string }>;
+        errorMessage?: string;
+      }
+  > {
+    if (!genJob.externalJobId) {
+      return {
+        status: 'failed',
+        errorMessage: `Generation job ${genJob.id} does not have an external provider job ID yet`,
+      };
+    }
+
+    switch (genJob.jobType) {
+      case 'image': {
+        const adapter = createImageAdapter(
+          genJob.provider,
+          this.getImageProviderApiKey(genJob.provider),
+        );
+        return adapter.getJob(genJob.externalJobId);
+      }
+      case 'video': {
+        const adapter = createVideoAdapter(
+          genJob.provider,
+          this.getVideoProviderApiKey(genJob.provider),
+        );
+        const result = await adapter.getJob(genJob.externalJobId);
+        return {
+          status: result.status,
+          outputs: result.outputs?.map((output) => ({
+            url: output.url,
+            mimeType: output.mimeType,
+          })),
+          errorMessage: result.errorMessage,
+        };
+      }
+      case 'faceswap-image': {
+        const adapter = createFaceSwapAdapter(
+          genJob.provider,
+          this.getImageProviderApiKey(genJob.provider),
+        );
+        return adapter.getJob(genJob.externalJobId);
+      }
+      default:
+        return {
+          status: 'failed',
+          errorMessage: `${genJob.jobType} jobs do not support provider webhooks`,
+        };
+    }
+  }
+
+  private async completeJobWithOutputs(
+    genJob: GenerationJob,
+    outputs: Array<{ url: string; mimeType: string }>,
+    assetKind: 'generated-image' | 'generated-video',
+    fallbackExtension: string,
+    externalJobId: string,
+  ): Promise<GenerationJob | null> {
+    const savedOutputs = await this.saveOutputsToStorage(
+      genJob.id,
+      genJob.userId,
+      outputs,
+      fallbackExtension,
+    );
+
+    try {
+      const completedJob = await this.prisma.$transaction(async (tx) => {
+        const completion = await tx.generationJob.updateMany({
+          where: {
+            id: genJob.id,
+            status: { in: ['queued', 'running'] },
+          },
+          data: {
+            status: 'completed',
+            externalJobId,
+            finalCredits: genJob.reservedCredits,
+            completedAt: new Date(),
+            errorMessage: null,
+            failedAt: null,
+          },
+        });
+
+        if (completion.count === 0) {
+          return null;
+        }
+
+        await this.persistSavedOutputs(tx, genJob.id, genJob.userId, assetKind, savedOutputs);
+        return tx.generationJob.findUnique({ where: { id: genJob.id } });
+      });
+
+      if (!completedJob) {
+        await this.cleanupSavedOutputs(savedOutputs);
+        return null;
+      }
+
+      await this.publishJobEvent(genJob.userId, completedJob);
+      return completedJob;
+    } catch (error) {
+      await this.cleanupSavedOutputs(savedOutputs);
+      throw error;
+    }
+  }
+
+  private getRefundReasonForJob(genJob: GenerationJob, reason: string): string {
+    switch (genJob.jobType) {
+      case 'video':
+        return `Refund for failed video job ${genJob.id} (${reason})`;
+      case 'faceswap-image':
+        return `Refund for failed face swap job ${genJob.id} (${reason})`;
+      default:
+        return `Refund for failed job ${genJob.id} (${reason})`;
+    }
   }
 
   private async getBalance(
@@ -925,26 +1159,13 @@ export class GenerationService {
         throw new Error('Generation completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-image',
         'png',
+        createdJob.externalJobId,
       );
-
-      const completedJob = await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        return tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
-      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
@@ -1175,26 +1396,13 @@ export class GenerationService {
         throw new Error('Video generation completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-video',
         'mp4',
+        createdJob.externalJobId,
       );
-
-      const completedJob = await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-video', savedOutputs);
-        return tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
-      await this.publishJobEvent(genJob.userId, completedJob);
     } catch (error) {
       await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
@@ -1215,9 +1423,8 @@ export class GenerationService {
     const failedAt = new Date();
 
     const updatedJob = await this.prisma.$transaction(async (tx) => {
-      // Atomic status guard: only one caller can transition to 'failed'
       const result = await tx.generationJob.updateMany({
-        where: { id: jobId, status: { not: 'failed' } },
+        where: { id: jobId, status: { in: ['queued', 'running'] } },
         data: { status: 'failed', errorMessage, failedAt },
       });
 

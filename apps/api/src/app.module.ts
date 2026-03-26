@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { getRedisConnectionConfig, RATE_LIMITS } from '@snapgen/config';
@@ -16,6 +16,8 @@ import { AdminModule } from './modules/admin/admin.module';
 import { CreditModule } from './modules/credit/credit.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { EventsModule } from './modules/events/events.module';
+import { HealthModule } from './modules/health/health.module';
+import { SentryExceptionFilter } from './filters/sentry-exception.filter';
 
 @Module({
     imports: [
@@ -56,8 +58,13 @@ import { EventsModule } from './modules/events/events.module';
         CreditModule,
         StorageModule,
         EventsModule,
+        HealthModule,
     ],
     providers: [
+        {
+            provide: APP_FILTER,
+            useClass: SentryExceptionFilter,
+        },
         {
             provide: APP_GUARD,
             useClass: ThrottlerGuard,

@@ -9,6 +9,7 @@ export interface ImageGenerationInput {
   prompt: string;
   negativePrompt?: string;
   referenceImages?: string[];
+  webhookUrl?: string;
   loraModelUrl?: string;
   aspectRatio?: string;
   seed?: number;
@@ -35,6 +36,7 @@ export interface ImageGenerationAdapter {
 export interface VideoGenerationInput {
   prompt: string;
   sourceImageUrl?: string;
+  webhookUrl?: string;
   aspectRatio?: string;
   durationSec?: number;
   settings?: Record<string, unknown>;
@@ -57,6 +59,7 @@ export interface VideoGenerationAdapter {
 export interface FaceSwapInput {
   sourceFaceUrl: string;
   targetImageUrl: string;
+  webhookUrl?: string;
 }
 
 export interface FaceSwapAdapter {
@@ -96,6 +99,8 @@ export interface TrainingAdapter {
 interface FalCreateJobResponse {
   request_id?: string;
   response_url?: string;
+  status_url?: string;
+  cancel_url?: string;
   status?: string;
 }
 
@@ -314,22 +319,68 @@ async function submitFalQueueRequest(
   return (await response.json()) as FalCreateJobResponse;
 }
 
+function trimSlashes(value: string): string {
+  return value.replace(/^\/+|\/+$/g, '');
+}
+
+function buildFalQueueResponseUrl(endpointPath: string, requestId: string): string {
+  return `${FAL_QUEUE_BASE_URL}/${trimSlashes(endpointPath)}/requests/${requestId}`;
+}
+
 function resolveFalQueueUrls(
   endpointPath: string,
   externalJobId: string,
 ): {
+  endpointPath: string;
+  requestId?: string;
   responseUrl: string;
   statusUrl: string;
 } {
-  if (externalJobId.startsWith('http://') || externalJobId.startsWith('https://')) {
+  let resolvedEndpointPath = trimSlashes(endpointPath);
+  let rawJobId = externalJobId;
+  const separatorIndex = externalJobId.indexOf('::');
+
+  if (separatorIndex !== -1) {
+    resolvedEndpointPath = trimSlashes(externalJobId.slice(0, separatorIndex)) || resolvedEndpointPath;
+    rawJobId = externalJobId.slice(separatorIndex + 2);
+  }
+
+  if (rawJobId.startsWith('http://') || rawJobId.startsWith('https://')) {
+    try {
+      const parsed = new URL(rawJobId);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const requestsIndex = segments.indexOf('requests');
+
+      if (requestsIndex > 0 && segments.length > requestsIndex + 1) {
+        const parsedEndpointPath = segments.slice(0, requestsIndex).join('/');
+        const requestId = segments[requestsIndex + 1];
+        const canonicalEndpointPath = trimSlashes(parsedEndpointPath) || resolvedEndpointPath;
+        const responseUrl = `${parsed.origin}/${canonicalEndpointPath}/requests/${requestId}`;
+
+        return {
+          endpointPath: canonicalEndpointPath,
+          requestId,
+          responseUrl,
+          statusUrl: `${responseUrl}/status`,
+        };
+      }
+    } catch {
+      // Fall through to direct URL handling below.
+    }
+
+    const responseUrl = rawJobId.replace(/\/status\/?$/, '');
     return {
-      responseUrl: externalJobId,
-      statusUrl: `${externalJobId}/status`,
+      endpointPath: resolvedEndpointPath,
+      responseUrl,
+      statusUrl: rawJobId.endsWith('/status') ? rawJobId : `${responseUrl}/status`,
     };
   }
 
-  const responseUrl = `${FAL_QUEUE_BASE_URL}/${endpointPath}/requests/${externalJobId}`;
+  const requestId = rawJobId;
+  const responseUrl = buildFalQueueResponseUrl(resolvedEndpointPath, requestId);
   return {
+    endpointPath: resolvedEndpointPath,
+    requestId,
     responseUrl,
     statusUrl: `${responseUrl}/status`,
   };
@@ -415,13 +466,44 @@ function formatFalLogs(status: FalQueueStatusResponse): string | undefined {
   return messages.slice(-3).join(' | ');
 }
 
+const FAL_MULTI_IMAGE_JOB_PREFIX = 'multi:';
+
+function encodeFalMultiImageJobId(jobIds: string[]): string {
+  return `${FAL_MULTI_IMAGE_JOB_PREFIX}${Buffer.from(
+    JSON.stringify(jobIds),
+    'utf8',
+  ).toString('base64url')}`;
+}
+
+function decodeFalMultiImageJobId(externalJobId: string): string[] | null {
+  if (!externalJobId.startsWith(FAL_MULTI_IMAGE_JOB_PREFIX)) {
+    return null;
+  }
+
+  const encodedPayload = externalJobId.slice(FAL_MULTI_IMAGE_JOB_PREFIX.length);
+  if (!encodedPayload) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (Array.isArray(parsed) && parsed.every((jobId) => typeof jobId === 'string' && jobId.length > 0)) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 // ─── Fal.ai Implementation ──────────────────────────
 export class FalImageAdapter implements ImageGenerationAdapter {
   readonly providerName = 'fal';
   private apiKey: string;
   private textSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/text-to-image';
   private editSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
-  private static multiJobRequests = new Map<string, string[]>();
+  private queueEndpointPath = 'fal-ai/bytedance';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -443,14 +525,10 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       return requests[0];
     }
 
-    const aggregateJobId = `multi:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    FalImageAdapter.multiJobRequests.set(
-      aggregateJobId,
-      requests.map((request) => request.externalJobId),
-    );
-
     return {
-      externalJobId: aggregateJobId,
+      externalJobId: encodeFalMultiImageJobId(
+        requests.map((request) => request.externalJobId),
+      ),
       status: requests.some((request) => request.status === 'running') ? 'running' : 'queued',
     };
   }
@@ -460,7 +538,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string }>;
     errorMessage?: string;
   }> {
-    const multiJobRequests = FalImageAdapter.multiJobRequests.get(externalJobId);
+    const multiJobRequests = decodeFalMultiImageJobId(externalJobId);
     if (multiJobRequests) {
       const results = await Promise.all(
         multiJobRequests.map((requestId) => this.getSingleJobResult(requestId)),
@@ -510,7 +588,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     return {
       externalJobId: this.encodeExternalJobId(
         endpointPath,
-        data.response_url ?? data.request_id ?? `fal-${Date.now()}-${index}`,
+        data.request_id ?? data.response_url ?? `fal-${Date.now()}-${index}`,
       ),
       status,
     };
@@ -522,8 +600,8 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     errorMessage?: string;
   }> {
     try {
-      const { endpointPath, jobId } = this.decodeExternalJobId(externalJobId);
-      const status = await getFalQueueStatus(this.apiKey, endpointPath, jobId);
+      const { jobId } = this.decodeExternalJobId(externalJobId);
+      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, jobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -539,7 +617,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       );
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
-        endpointPath,
+        this.queueEndpointPath,
         jobId,
         status.response_url,
       );
@@ -594,6 +672,10 @@ export class FalImageAdapter implements ImageGenerationAdapter {
 
     if (endpointPath === this.editSubmitEndpointPath) {
       payload.image_urls = input.referenceImages?.slice(0, 9) || [];
+    }
+
+    if (input.webhookUrl) {
+      payload.webhook_url = input.webhookUrl;
     }
 
     return payload;
@@ -701,6 +783,12 @@ export class ReplicateImageAdapter implements ImageGenerationAdapter {
           num_inference_steps: input.steps ?? 4,
           disable_safety_checker: true,
         },
+        ...(input.webhookUrl
+          ? {
+              webhook: input.webhookUrl,
+              webhook_events_filter: ['completed'],
+            }
+          : {}),
       }),
     });
 
@@ -1161,6 +1249,7 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
       duration: `${input.durationSec ?? 5}`,
       aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
       generate_audio: false,
+      ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
       ...(motionAmount != null
         ? {
           cfg_scale: Math.max(0, Math.min(1, motionAmount / 10)),
@@ -1174,7 +1263,7 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     }
 
     return {
-      externalJobId: data.response_url ?? data.request_id ?? `fal-video-${Date.now()}`,
+      externalJobId: data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
       status,
     };
   }
@@ -1449,6 +1538,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
   readonly providerName = 'fal';
   private apiKey: string;
   private editEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
+  private queueEndpointPath = 'fal-ai/bytedance';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -1478,6 +1568,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       safety_tolerance: 2,
       enable_safety_checker: true,
       output_format: 'jpeg',
+      ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
     });
 
     const status = mapFalStatus(data.status);
@@ -1485,7 +1576,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       throw new Error('Fal face swap job failed to start');
     }
 
-    const externalJobId = data.response_url ?? data.request_id ?? `fal-faceswap-${Date.now()}`;
+    const externalJobId = data.request_id ?? data.response_url ?? `fal-faceswap-${Date.now()}`;
 
     return {
       externalJobId,
@@ -1499,7 +1590,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
     errorMessage?: string;
   }> {
     try {
-      const status = await getFalQueueStatus(this.apiKey, this.editEndpointPath, externalJobId);
+      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -1515,7 +1606,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       );
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
-        this.editEndpointPath,
+        this.queueEndpointPath,
         externalJobId,
         status.response_url,
       );

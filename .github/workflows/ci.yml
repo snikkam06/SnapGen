@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: snapgen
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snapgen"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/snapgen?connection_limit=1
+      DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/snapgen
+      REDIS_URL: redis://127.0.0.1:6379
+      APP_URL: http://127.0.0.1:3000
+      API_URL: http://127.0.0.1:3001
+      API_PUBLIC_URL: http://127.0.0.1:3001
+      API_SERVER_URL: http://127.0.0.1:3001
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:3001/api
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      PORT: 3001
+      STORAGE_MODE: local
+      CLERK_SECRET_KEY: sk_test_ci
+      CLERK_JWKS_URL: https://example.com/.well-known/jwks.json
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ci
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+      NEXT_PUBLIC_CLERK_SIGN_UP_URL: /sign-up
+      STRIPE_SECRET_KEY: sk_test_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Apply migrations
+        run: pnpm db:migrate:deploy
+
+      - name: Seed database
+        run: pnpm db:seed
+
+      - name: Smoke test
+        env:
+          NODE_ENV: test
+        run: pnpm smoke:test

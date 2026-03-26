@@ -17,6 +17,7 @@
     "dependencies": {
         "@aws-sdk/client-s3": "^3.637.0",
         "@prisma/client": "^5.20.0",
+        "@sentry/node": "^10.46.0",
         "@snapgen/config": "workspace:*",
         "@snapgen/db": "workspace:*",
         "@snapgen/media-adapters": "workspace:*",

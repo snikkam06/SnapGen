@@ -25,6 +25,6 @@ import { EventsModule } from '../events/events.module';
   ],
   controllers: [GenerationController],
   providers: [GenerationService, QueueHealthService],
-  exports: [GenerationService],
+  exports: [GenerationService, QueueHealthService],
 })
 export class GenerationModule {}

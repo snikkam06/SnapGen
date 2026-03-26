@@ -12,7 +12,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { WebhookService } from './webhook.service';
 import { Request } from 'express';
 
-const ALLOWED_PROVIDERS = new Set(['fal', 'replicate', 'runpod']);
+const ALLOWED_PROVIDERS = new Set(['fal', 'replicate']);
 
 @ApiTags('webhooks')
 @Controller('v1/webhooks')
@@ -34,11 +34,20 @@ export class WebhookController {
 
   @Post('provider/:provider')
   @ApiOperation({ summary: 'Handle AI provider webhooks' })
-  async handleProvider(@Param('provider') provider: string, @Body() body: Record<string, unknown>) {
+  async handleProvider(
+    @Param('provider') provider: string,
+    @Req() req: RawBodyRequest<Request>,
+    @Body() body: Record<string, unknown>,
+  ) {
     if (!ALLOWED_PROVIDERS.has(provider)) {
       throw new BadRequestException(`Unknown provider: ${provider}`);
     }
-    await this.webhookService.handleProviderWebhook(provider, body);
+    const rawBody = req.rawBody;
+    if (!rawBody) throw new BadRequestException('Missing raw body');
+    await this.webhookService.handleProviderWebhook(provider, body, {
+      rawBody,
+      headers: req.headers,
+    });
     return { received: true };
   }
 }

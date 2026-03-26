@@ -1,0 +1,28 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "pnpm build",
+    "watchPatterns": [
+      "/apps/api/**",
+      "/packages/config/**",
+      "/packages/db/**",
+      "/packages/media-adapters/**",
+      "/packages/types/**",
+      "/scripts/**",
+      "/package.json",
+      "/pnpm-lock.yaml",
+      "/pnpm-workspace.yaml",
+      "/tsconfig.base.json",
+      "/turbo.json"
+    ]
+  },
+  "deploy": {
+    "preDeployCommand": "pnpm --dir ../.. db:migrate:deploy && pnpm --dir ../.. db:seed",
+    "startCommand": "pnpm start",
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 180,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

@@ -12,6 +12,7 @@
         "db:push": "turbo run db:push --filter=@snapgen/db",
         "db:migrate:deploy": "turbo run db:migrate:deploy --filter=@snapgen/db",
         "db:seed": "turbo run db:seed --filter=@snapgen/db",
+        "smoke:test": "node scripts/smoke-test.mjs",
         "worker:dev:multi": "pnpm --filter @snapgen/worker-media dev:multi",
         "worker:start:multi": "pnpm --filter @snapgen/worker-media start:multi",
         "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""

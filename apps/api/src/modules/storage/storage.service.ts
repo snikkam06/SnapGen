@@ -2,11 +2,18 @@ import { Injectable } from '@nestjs/common';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { getLegacyLocalStorageDirs, getLocalStorageDir } from '@snapgen/config';
+import {
+  STORAGE_BUCKETS,
+  getLegacyLocalStorageDirs,
+  getLocalStorageDir,
+  hasRemoteStorageConfig,
+  isProductionRuntime,
+} from '@snapgen/config';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -29,20 +36,58 @@ export class StorageService {
           secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
         },
       });
+      return;
+    }
+
+    if (isProductionRuntime()) {
+      throw new Error('Cloudflare R2 object storage is required in production');
     }
   }
 
   private hasRemoteStorageConfig(): boolean {
-    return Boolean(
-      process.env.R2_ACCOUNT_ID &&
-      process.env.R2_ACCESS_KEY_ID &&
-      process.env.R2_SECRET_ACCESS_KEY &&
-      process.env.STORAGE_MODE !== 'local',
-    );
+    return hasRemoteStorageConfig(process.env);
   }
 
   isLocalMode(): boolean {
     return !this.s3;
+  }
+
+  async checkHealth(): Promise<{
+    healthy: boolean;
+    mode: 'local' | 'r2';
+    bucket: string | null;
+    detail: string;
+  }> {
+    if (this.isLocalMode()) {
+      return {
+        healthy: !isProductionRuntime(),
+        mode: 'local',
+        bucket: null,
+        detail: isProductionRuntime()
+          ? 'Local disk storage is active in production'
+          : 'Local disk storage is active for development',
+      };
+    }
+
+    const bucket =
+      process.env.R2_BUCKET_OUTPUTS || process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.outputs;
+
+    try {
+      await this.s3!.send(new HeadBucketCommand({ Bucket: bucket }));
+      return {
+        healthy: true,
+        mode: 'r2',
+        bucket,
+        detail: 'R2 bucket is reachable',
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        mode: 'r2',
+        bucket,
+        detail: error instanceof Error ? error.message : 'R2 health check failed',
+      };
+    }
   }
 
   async getSignedUploadUrl(bucket: string, key: string, contentType: string): Promise<string> {

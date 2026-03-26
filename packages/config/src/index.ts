@@ -82,6 +82,19 @@ export interface RedisConnectionConfig {
     maxRetriesPerRequest: null;
 }
 
+export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.NODE_ENV === 'production';
+}
+
+export function hasRemoteStorageConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+    return Boolean(
+        env.R2_ACCOUNT_ID
+        && env.R2_ACCESS_KEY_ID
+        && env.R2_SECRET_ACCESS_KEY
+        && env.STORAGE_MODE !== 'local',
+    );
+}
+
 type SupabaseUrlExpectation = 'runtime' | 'direct';
 
 function isSupabasePoolerHost(hostname: string): boolean {

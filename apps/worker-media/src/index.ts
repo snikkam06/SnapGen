@@ -9,7 +9,14 @@ import { Worker, Queue, Job } from 'bullmq';
 import { PrismaClient, GenerationJob } from '@prisma/client';
 import { Redis } from 'ioredis';
 import { createImageAdapter, createVideoAdapter, createFaceSwapAdapter } from '@snapgen/media-adapters';
-import { assertValidSupabaseDatabaseConfig, getLocalStorageDir, getRedisConnectionConfig } from '@snapgen/config';
+import {
+  assertValidSupabaseDatabaseConfig,
+  getLocalStorageDir,
+  getRedisConnectionConfig,
+  hasRemoteStorageConfig,
+  isProductionRuntime,
+} from '@snapgen/config';
+import { captureWorkerException, flushWorkerSentry, initWorkerSentry } from './sentry';
 
 function clearEmptyEnvVar(name: string): void {
   if (process.env[name]?.trim() === '') {
@@ -113,23 +120,36 @@ function loadWorkerEnv(): void {
 }
 
 loadWorkerEnv();
+initWorkerSentry();
 
+process.on('unhandledRejection', (reason) => {
+  captureWorkerException(reason, { phase: 'unhandledRejection' });
+});
+
+process.on('uncaughtException', async (error) => {
+  captureWorkerException(error, { phase: 'uncaughtException' });
+  await flushWorkerSentry();
+  console.error('[Worker] Uncaught exception:', error);
+  process.exit(1);
+});
+
+const PRODUCTION_RUNTIME = isProductionRuntime();
 const prisma = new PrismaClient();
 const connection = getRedisConnectionConfig(process.env.REDIS_URL);
-const s3 =
-  process.env.R2_ACCOUNT_ID &&
-  process.env.R2_ACCESS_KEY_ID &&
-  process.env.R2_SECRET_ACCESS_KEY &&
-  process.env.STORAGE_MODE !== 'local'
-    ? new S3Client({
-        region: 'auto',
-        endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-        },
-      })
-    : null;
+const REMOTE_STORAGE_CONFIGURED = hasRemoteStorageConfig(process.env);
+if (PRODUCTION_RUNTIME && !REMOTE_STORAGE_CONFIGURED) {
+  throw new Error('Cloudflare R2 object storage must be configured for the production worker');
+}
+const s3 = REMOTE_STORAGE_CONFIGURED
+  ? new S3Client({
+      region: 'auto',
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+      },
+    })
+  : null;
 
 // ─── Env-configurable concurrency & limiter ──────────
 function parsePositiveInt(value: string | undefined, defaultVal: number, name: string): number {
@@ -141,6 +161,12 @@ function parsePositiveInt(value: string | undefined, defaultVal: number, name: s
   }
   return Math.floor(parsed);
 }
+
+const PROVIDER_WEBHOOK_FALLBACK_DELAY_MS = parsePositiveInt(
+  process.env.PROVIDER_WEBHOOK_FALLBACK_DELAY_MS,
+  600000,
+  'PROVIDER_WEBHOOK_FALLBACK_DELAY_MS',
+);
 
 function isSupabaseTransactionPoolerUrl(parsed: URL): boolean {
   return parsed.hostname.endsWith('.pooler.supabase.com') && parsed.port === '6543';
@@ -224,6 +250,33 @@ const providerSemaphores: Record<string, Semaphore> = {
 
 function getProviderSemaphore(provider: string): Semaphore {
   return providerSemaphores[provider] ?? new Semaphore(5);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/g, '');
+}
+
+function getProviderWebhookUrl(provider: string): string | undefined {
+  if (process.env.ENABLE_PROVIDER_WEBHOOKS === 'false') {
+    return undefined;
+  }
+
+  const apiPublicUrl = process.env.API_PUBLIC_URL?.trim();
+  if (!apiPublicUrl) {
+    return undefined;
+  }
+
+  switch (provider) {
+    case 'fal':
+    case 'replicate':
+      return `${trimTrailingSlash(apiPublicUrl)}/api/v1/webhooks/provider/${provider}`;
+    default:
+      return undefined;
+  }
+}
+
+function getInitialPollDelayMs(webhookUrl?: string): number {
+  return webhookUrl ? PROVIDER_WEBHOOK_FALLBACK_DELAY_MS : 5000;
 }
 
 // ─── Redis pub/sub publisher ─────────────────────────
@@ -415,6 +468,10 @@ async function persistRemoteOutput(
       }),
     );
   } else {
+    if (PRODUCTION_RUNTIME) {
+      throw new Error('Remote object storage is required in production');
+    }
+
     // Fallback: save to local filesystem
     const filePath = path.join(getLocalStorageDir(__dirname), bucket, key);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -593,9 +650,19 @@ async function handlePollJob(
 
 async function bootstrap() {
   if (!(await isRedisReachable())) {
-    console.warn('Redis is unavailable. Media worker is disabled.');
+    if (PRODUCTION_RUNTIME) {
+      captureWorkerException(new Error('Redis is unavailable. Production media worker cannot start.'), {
+        phase: 'bootstrap',
+      });
+      await flushWorkerSentry();
+    }
+    console.error(
+      PRODUCTION_RUNTIME
+        ? 'FATAL: Redis is unavailable. Production media worker cannot start.'
+        : 'Redis is unavailable. Media worker is disabled.',
+    );
     await prisma.$disconnect();
-    process.exit(0);
+    process.exit(PRODUCTION_RUNTIME ? 1 : 0);
   }
 
   // ─── Poll queues (used by dispatch handlers to schedule poll jobs) ──
@@ -622,6 +689,7 @@ async function bootstrap() {
             genJob.provider,
             getImageProviderApiKey(genJob.provider),
           );
+          const webhookUrl = getProviderWebhookUrl(genJob.provider);
 
           const settings = genJob.settingsJson as Record<string, unknown>;
           result = await adapter.createJob({
@@ -634,6 +702,7 @@ async function bootstrap() {
             numImages: (settings.numImages as number) || 4,
             seed: settings.seed as number,
             guidance: settings.guidance as number,
+            webhookUrl,
             settings: { characterName: settings.characterName },
           });
         } finally {
@@ -659,13 +728,23 @@ async function bootstrap() {
           }
         }
 
+        const webhookUrl = getProviderWebhookUrl(genJob.provider);
         // Schedule the poll job — dispatch slot is now FREE
         await imagePollQueue.add(
           'poll-image',
           { jobId, externalJobId: result.externalJobId, attempts: 0, provider: genJob.provider },
-          { delay: 5000, removeOnComplete: 10, removeOnFail: 50 },
+          {
+            delay: getInitialPollDelayMs(webhookUrl),
+            removeOnComplete: 10,
+            removeOnFail: 50,
+          },
         );
       } catch (error) {
+        captureWorkerException(error, {
+          queue: 'image-generation',
+          phase: 'dispatch',
+          jobId,
+        });
         console.error(`[Worker] Image dispatch failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -694,6 +773,11 @@ async function bootstrap() {
         );
       } catch (error) {
         const { jobId } = job.data;
+        captureWorkerException(error, {
+          queue: 'image-poll',
+          phase: 'poll',
+          jobId,
+        });
         console.error(`[Worker] Image poll failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -721,6 +805,7 @@ async function bootstrap() {
             genJob.provider,
             getVideoProviderApiKey(genJob.provider),
           );
+          const webhookUrl = getProviderWebhookUrl(genJob.provider);
 
           const settings = genJob.settingsJson as Record<string, unknown>;
           result = await adapter.createJob({
@@ -728,6 +813,7 @@ async function bootstrap() {
             sourceImageUrl: settings.sourceImageUrl as string | undefined,
             aspectRatio: settings.aspectRatio as string | undefined,
             durationSec: settings.durationSec as number | undefined,
+            webhookUrl,
             settings: {
               motionAmount: settings.motionAmount,
               cameraControl: settings.cameraControl,
@@ -754,12 +840,22 @@ async function bootstrap() {
           }
         }
 
+        const webhookUrl = getProviderWebhookUrl(genJob.provider);
         await videoPollQueue.add(
           'poll-video',
           { jobId, externalJobId: result.externalJobId, attempts: 0, provider: genJob.provider },
-          { delay: 5000, removeOnComplete: 10, removeOnFail: 50 },
+          {
+            delay: getInitialPollDelayMs(webhookUrl),
+            removeOnComplete: 10,
+            removeOnFail: 50,
+          },
         );
       } catch (error) {
+        captureWorkerException(error, {
+          queue: 'video-generation',
+          phase: 'dispatch',
+          jobId,
+        });
         console.error(`[Worker] Video dispatch failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -788,6 +884,11 @@ async function bootstrap() {
         );
       } catch (error) {
         const { jobId } = job.data;
+        captureWorkerException(error, {
+          queue: 'video-poll',
+          phase: 'poll',
+          jobId,
+        });
         console.error(`[Worker] Video poll failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -815,11 +916,13 @@ async function bootstrap() {
             genJob.provider,
             getFaceSwapProviderApiKey(genJob.provider),
           );
+          const webhookUrl = getProviderWebhookUrl(genJob.provider);
 
           const settings = genJob.settingsJson as Record<string, unknown>;
           result = await adapter.createJob({
             sourceFaceUrl: settings.sourceFaceUrl as string,
             targetImageUrl: settings.targetImageUrl as string,
+            webhookUrl,
           });
         } finally {
           sem.release();
@@ -842,12 +945,22 @@ async function bootstrap() {
           }
         }
 
+        const webhookUrl = getProviderWebhookUrl(genJob.provider);
         await faceswapPollQueue.add(
           'poll-faceswap',
           { jobId, externalJobId: result.externalJobId, attempts: 0, provider: genJob.provider },
-          { delay: 5000, removeOnComplete: 10, removeOnFail: 50 },
+          {
+            delay: getInitialPollDelayMs(webhookUrl),
+            removeOnComplete: 10,
+            removeOnFail: 50,
+          },
         );
       } catch (error) {
+        captureWorkerException(error, {
+          queue: 'faceswap-generation',
+          phase: 'dispatch',
+          jobId,
+        });
         console.error(`[Worker] Faceswap dispatch failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -876,6 +989,11 @@ async function bootstrap() {
         );
       } catch (error) {
         const { jobId } = job.data;
+        captureWorkerException(error, {
+          queue: 'faceswap-poll',
+          phase: 'poll',
+          jobId,
+        });
         console.error(`[Worker] Faceswap poll failed: ${jobId}`, error);
         await failJob(jobId, error instanceof Error ? error.message : 'Unknown error');
         throw error;
@@ -955,8 +1073,10 @@ async function bootstrap() {
         ),
       ]);
     } catch (err) {
+      captureWorkerException(err, { phase: 'shutdown' });
       console.error('[Worker] Error during shutdown:', err);
     }
+    await flushWorkerSentry();
     process.exit(0);
   }
 
@@ -964,4 +1084,9 @@ async function bootstrap() {
   process.on('SIGINT', gracefulShutdown);
 }
 
-void bootstrap();
+void bootstrap().catch(async (error) => {
+  captureWorkerException(error, { phase: 'bootstrap' });
+  console.error('[Worker] Fatal bootstrap error:', error);
+  await flushWorkerSentry();
+  process.exit(1);
+});
