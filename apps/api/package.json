@@ -2,6 +2,7 @@
     "name": "@snapgen/api",
     "version": "0.1.0",
     "private": true,
+    "packageManager": "pnpm@9.1.0",
     "scripts": {
         "dev": "node ../../scripts/with-database-url.mjs nest start --watch --port 3001",
         "build": "nest build",
