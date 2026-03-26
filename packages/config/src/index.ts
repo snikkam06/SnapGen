@@ -8,12 +8,12 @@ export const APP_DESCRIPTION = 'Create stunning AI-generated images with custom 
 
 // ─── Credit costs per job type ───────────────────────
 export const CREDIT_COSTS = {
-    image: 5,
-    video: 25,
-    'faceswap-image': 10,
-    'faceswap-video': 30,
+    image: 20,            // regular generation
+    'faceswap-image': 30, // enhanced generation
+    video: 25,            // video 5 sec
+    'faceswap-video': 50, // video 10 sec
 
-    training: 100,
+    training: 25,
 } as const;
 
 // ─── Rate limits ─────────────────────────────────────

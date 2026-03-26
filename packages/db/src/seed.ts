@@ -11,7 +11,7 @@ async function main() {
             code: 'free',
             name: 'Free',
             monthlyPriceCents: 0,
-            monthlyCredits: 50,
+            monthlyCredits: 720,
             featuresJson: {
                 maxCharacters: 1,
                 maxImagesPerJob: 2,
@@ -25,7 +25,7 @@ async function main() {
             code: 'creator-monthly',
             name: 'Creator Monthly',
             monthlyPriceCents: 3200,
-            monthlyCredits: 500,
+            monthlyCredits: 7200,
             featuresJson: {
                 maxCharacters: 5,
                 maxImagesPerJob: 4,
@@ -38,7 +38,7 @@ async function main() {
             code: 'creator-yearly',
             name: 'Creator Yearly',
             monthlyPriceCents: 15000,
-            monthlyCredits: 6000,
+            monthlyCredits: 86400,
             featuresJson: {
                 maxCharacters: 5,
                 maxImagesPerJob: 4,
@@ -52,7 +52,7 @@ async function main() {
             code: 'pro-monthly',
             name: 'Pro Monthly',
             monthlyPriceCents: 7500,
-            monthlyCredits: 2000,
+            monthlyCredits: 18000,
             featuresJson: {
                 maxCharacters: 20,
                 maxImagesPerJob: 8,
@@ -65,7 +65,7 @@ async function main() {
             code: 'pro-yearly',
             name: 'Pro Yearly',
             monthlyPriceCents: 36000,
-            monthlyCredits: 24000,
+            monthlyCredits: 216000,
             featuresJson: {
                 maxCharacters: 20,
                 maxImagesPerJob: 8,
@@ -79,7 +79,7 @@ async function main() {
             code: 'business-monthly',
             name: 'Business Monthly',
             monthlyPriceCents: 17000,
-            monthlyCredits: 10000,
+            monthlyCredits: 45000,
             featuresJson: {
                 maxCharacters: -1,
                 maxImagesPerJob: 16,
@@ -94,7 +94,7 @@ async function main() {
             code: 'business-yearly',
             name: 'Business Yearly',
             monthlyPriceCents: 80000,
-            monthlyCredits: 120000,
+            monthlyCredits: 540000,
             featuresJson: {
                 maxCharacters: -1,
                 maxImagesPerJob: 16,

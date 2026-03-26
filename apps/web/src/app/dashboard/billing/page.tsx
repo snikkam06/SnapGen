@@ -60,7 +60,7 @@ const plans: PlanOption[] = [
         monthlyPrice: '$32',
         yearlyPrice: '$150',
         yearlyMonthlyEquiv: '$12.50',
-        credits: '500',
+        credits: '7,200',
         popular: true,
     },
     {
@@ -70,7 +70,7 @@ const plans: PlanOption[] = [
         monthlyPrice: '$75',
         yearlyPrice: '$360',
         yearlyMonthlyEquiv: '$30',
-        credits: '2,000',
+        credits: '18,000',
         popular: false,
     },
     {
@@ -80,7 +80,7 @@ const plans: PlanOption[] = [
         monthlyPrice: '$170',
         yearlyPrice: '$800',
         yearlyMonthlyEquiv: '$66.67',
-        credits: '10,000',
+        credits: '45,000',
         popular: false,
     },
 ];
@@ -205,7 +205,7 @@ export default function BillingPage() {
                                 {billingInterval === 'yearly' && (
                                     <p className="text-xs text-white/40 mt-1">Billed yearly at {plan.yearlyPrice}/yr</p>
                                 )}
-                                <p className="text-sm text-purple-400 mt-1">{plan.credits} credits/mo</p>
+                                <p className="text-sm text-purple-400 mt-1">{plan.credits} tokens/mo</p>
                                 <button
                                     className="btn-primary mt-4 text-sm"
                                     disabled={checkoutMutation.isPending || isCurrentPlan}
