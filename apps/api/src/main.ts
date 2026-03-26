@@ -8,7 +8,6 @@ initApiSentry();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { json } from 'express';
 import helmet from 'helmet';
 
 async function isRedisReachable(redisUrl?: string): Promise<boolean> {
@@ -56,20 +55,14 @@ async function bootstrap() {
 
     const { AppModule } = await import('./app.module');
     const app = await NestFactory.create(AppModule, {
-      bodyParser: false,
       rawBody: true,
     });
 
     // Security headers
     app.use(helmet());
 
-    // Custom body parser that preserves the raw body for webhook signature verification
-    app.use(json({
-      limit: '50mb',
-      verify: (req: any, _res, buf: Buffer) => {
-        req.rawBody = buf;
-      },
-    }));
+    // Increase body size limit for file uploads
+    app.useBodyParser('json', { limit: '50mb' });
 
     // Global prefix
     app.setGlobalPrefix('api');
