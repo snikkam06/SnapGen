@@ -39,6 +39,9 @@ const cameraControls = [
   { value: 'tilt_down', label: 'Tilt Down' },
 ];
 
+const JOB_STATUS_FALLBACK_POLL_MS = 5000;
+const JOB_STATUS_TIMEOUT_MS = 15 * 60 * 1000;
+
 type VideoMode = 'text' | 'image';
 type SourceMode = 'feed' | 'upload';
 
@@ -167,11 +170,11 @@ function VideoPageContent() {
     refetchInterval: (query) => {
       const status = (query.state.data as JobDetail | undefined)?.status;
       if (status === 'completed' || status === 'failed') return false;
-      if (jobStartedAt && Date.now() - jobStartedAt > 5 * 60 * 1000) {
+      if (jobStartedAt && Date.now() - jobStartedAt > JOB_STATUS_TIMEOUT_MS) {
         setJobTimedOut(true);
         return false;
       }
-      return 30000; // Fallback polling; SSE provides real-time updates
+      return JOB_STATUS_FALLBACK_POLL_MS; // SSE is primary; polling covers missed events or webhook delays
     },
     queryFn: () => api.getJob(getToken, activeJobId as string) as Promise<JobDetail>,
   });

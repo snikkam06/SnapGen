@@ -164,7 +164,7 @@ function parsePositiveInt(value: string | undefined, defaultVal: number, name: s
 
 const PROVIDER_WEBHOOK_FALLBACK_DELAY_MS = parsePositiveInt(
   process.env.PROVIDER_WEBHOOK_FALLBACK_DELAY_MS,
-  600000,
+  30000,
   'PROVIDER_WEBHOOK_FALLBACK_DELAY_MS',
 );
 
@@ -1039,6 +1039,7 @@ async function bootstrap() {
   console.log(
     `   Poll: total=${TOTAL_POLL_CONCURRENCY} (${POLL_CONCURRENCY_PER_QUEUE} per queue across image-poll, video-poll, faceswap-poll)`,
   );
+  console.log(`   Provider webhook fallback delay: ${PROVIDER_WEBHOOK_FALLBACK_DELAY_MS}ms`);
   console.log(`   Provider limits: fal=${process.env.FAL_CONCURRENCY_LIMIT || 10}, replicate=${process.env.REPLICATE_CONCURRENCY_LIMIT || 5}, google=${process.env.GOOGLE_CONCURRENCY_LIMIT || 5}`);
 
   const SHUTDOWN_TIMEOUT_MS = 15_000;
