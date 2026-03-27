@@ -47,6 +47,8 @@ const characterOrientations = [
 
 const JOB_STATUS_FALLBACK_POLL_MS = 5000;
 const JOB_STATUS_TIMEOUT_MS = 15 * 60 * 1000;
+const MOTION_CONTROL_CREDITS_PER_SECOND = 40;
+const MAX_REFERENCE_VIDEO_DURATION_SEC = 10;
 
 type VideoMode = 'text' | 'image';
 type SourceMode = 'feed' | 'upload';
@@ -128,6 +130,12 @@ function VideoPageContent() {
   const [uploadedReferenceVideoPreview, setUploadedReferenceVideoPreview] = useState<string | null>(
     null,
   );
+  const [uploadedReferenceVideoDurationSec, setUploadedReferenceVideoDurationSec] =
+    useState<number | null>(null);
+  const [resolvedReferenceVideoDurationSec, setResolvedReferenceVideoDurationSec] =
+    useState<number | null>(null);
+  const [isResolvingReferenceVideoDuration, setIsResolvingReferenceVideoDuration] =
+    useState(false);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
   const referenceVideoInputRef = useRef<HTMLInputElement>(null);
   const tokenQuery = useApiToken();
@@ -224,6 +232,78 @@ function VideoPageContent() {
       : uploadedReferenceVideoAsset
     : null;
 
+  const activeReferenceVideoDurationSec = requiresReferenceVideo
+    ? typeof activeReferenceVideoMeta?.durationSec === 'number' && activeReferenceVideoMeta.durationSec > 0
+      ? activeReferenceVideoMeta.durationSec
+      : referenceVideoMode === 'upload'
+        ? uploadedReferenceVideoDurationSec ?? resolvedReferenceVideoDurationSec
+        : resolvedReferenceVideoDurationSec
+    : null;
+
+  useEffect(() => {
+    if (!requiresReferenceVideo) {
+      setResolvedReferenceVideoDurationSec(null);
+      setIsResolvingReferenceVideoDuration(false);
+      return;
+    }
+
+    if (
+      typeof activeReferenceVideoMeta?.durationSec === 'number'
+      && activeReferenceVideoMeta.durationSec > 0
+    ) {
+      setResolvedReferenceVideoDurationSec(activeReferenceVideoMeta.durationSec);
+      setIsResolvingReferenceVideoDuration(false);
+      return;
+    }
+
+    if (
+      referenceVideoMode === 'upload'
+      && typeof uploadedReferenceVideoDurationSec === 'number'
+      && uploadedReferenceVideoDurationSec > 0
+    ) {
+      setResolvedReferenceVideoDurationSec(uploadedReferenceVideoDurationSec);
+      setIsResolvingReferenceVideoDuration(false);
+      return;
+    }
+
+    if (!activeReferenceVideoPreview) {
+      setResolvedReferenceVideoDurationSec(null);
+      setIsResolvingReferenceVideoDuration(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsResolvingReferenceVideoDuration(true);
+    setResolvedReferenceVideoDurationSec(null);
+
+    void resolveVideoDurationSec(activeReferenceVideoPreview)
+      .then((resolvedDurationSec) => {
+        if (!isCancelled) {
+          setResolvedReferenceVideoDurationSec(resolvedDurationSec);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setResolvedReferenceVideoDurationSec(null);
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsResolvingReferenceVideoDuration(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    activeReferenceVideoMeta?.durationSec,
+    activeReferenceVideoPreview,
+    referenceVideoMode,
+    requiresReferenceVideo,
+    uploadedReferenceVideoDurationSec,
+  ]);
+
   const jobQuery = useQuery({
     queryKey: ['job', userId, activeJobId],
     enabled: isReady && !!activeJobId,
@@ -258,13 +338,16 @@ function VideoPageContent() {
   });
 
   const uploadReferenceVideoMutation = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async (variables: { file: File; durationSec: number }) => {
       if (!isReady) throw new Error('Authentication token unavailable');
-      return api.uploadVideoAsset(getToken, file) as Promise<AssetItem>;
+      return api.uploadVideoAsset(getToken, variables.file, {
+        durationSec: variables.durationSec,
+      }) as Promise<AssetItem>;
     },
-    onSuccess: async (asset) => {
+    onSuccess: async (asset, variables) => {
       setUploadedReferenceVideoAsset(asset);
       setUploadedReferenceVideoPreview(asset.url);
+      setUploadedReferenceVideoDurationSec(asset.durationSec ?? variables.durationSec);
       toast.success('Reference video uploaded');
       await queryClient.invalidateQueries({ queryKey: ['assets'] });
     },
@@ -275,6 +358,7 @@ function VideoPageContent() {
 
       setUploadedReferenceVideoAsset(null);
       setUploadedReferenceVideoPreview(null);
+      setUploadedReferenceVideoDurationSec(null);
       toast.error(error instanceof Error ? error.message : 'Failed to upload reference video');
     },
   });
@@ -290,6 +374,7 @@ function VideoPageContent() {
           workflow: videoWorkflow,
           ...(videoWorkflow === 'motion-control'
             ? {
+                referenceVideoDurationSec: activeReferenceVideoDurationSec || undefined,
                 characterOrientation,
                 keepOriginalSound,
               }
@@ -326,9 +411,21 @@ function VideoPageContent() {
   const isUploadingSource = uploadSourceMutation.isPending;
   const isUploadingReferenceVideo = uploadReferenceVideoMutation.isPending;
   const hasImageToVideoDirection = Boolean(prompt.trim()) || cameraControl !== 'none';
+  const isReferenceVideoTooLong =
+    typeof activeReferenceVideoDurationSec === 'number'
+    && activeReferenceVideoDurationSec > MAX_REFERENCE_VIDEO_DURATION_SEC;
+  const motionControlCredits =
+    typeof activeReferenceVideoDurationSec === 'number' && activeReferenceVideoDurationSec > 0
+      ? calculateMotionControlCredits(activeReferenceVideoDurationSec)
+      : null;
   const canGenerate =
     videoWorkflow === 'motion-control'
-      ? Boolean(activeSourceAssetId && activeReferenceVideoAssetId)
+      ? Boolean(
+          activeSourceAssetId
+          && activeReferenceVideoAssetId
+          && motionControlCredits
+          && !isReferenceVideoTooLong,
+        )
       : videoMode === 'text'
         ? Boolean(prompt.trim())
         : Boolean(activeSourceAssetId && hasImageToVideoDirection);
@@ -379,7 +476,7 @@ function VideoPageContent() {
     reader.readAsDataURL(file);
   };
 
-  const handleUploadReferenceVideoFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadReferenceVideoFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -394,16 +491,32 @@ function VideoPageContent() {
       return;
     }
 
-    if (uploadedReferenceVideoPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(uploadedReferenceVideoPreview);
-    }
+    const previewUrl = URL.createObjectURL(file);
 
-    setUploadedReferenceVideoPreview(URL.createObjectURL(file));
-    setUploadedReferenceVideoAsset(null);
-    setReferenceVideoMode('upload');
-    setActiveJobId(null);
-    setJobTimedOut(false);
-    uploadReferenceVideoMutation.mutate(file);
+    try {
+      const resolvedDurationSec = await resolveVideoDurationSec(previewUrl);
+      if (resolvedDurationSec > MAX_REFERENCE_VIDEO_DURATION_SEC) {
+        throw new Error('Reference videos must be 10 seconds or shorter');
+      }
+
+      if (uploadedReferenceVideoPreview?.startsWith('blob:')) {
+        URL.revokeObjectURL(uploadedReferenceVideoPreview);
+      }
+
+      setUploadedReferenceVideoPreview(previewUrl);
+      setUploadedReferenceVideoDurationSec(resolvedDurationSec);
+      setUploadedReferenceVideoAsset(null);
+      setReferenceVideoMode('upload');
+      setActiveJobId(null);
+      setJobTimedOut(false);
+      uploadReferenceVideoMutation.mutate({ file, durationSec: resolvedDurationSec });
+    } catch (error) {
+      URL.revokeObjectURL(previewUrl);
+      if (referenceVideoInputRef.current) {
+        referenceVideoInputRef.current.value = '';
+      }
+      toast.error(error instanceof Error ? error.message : 'Failed to read video duration');
+    }
   };
 
   const clearUploadedSource = () => {
@@ -421,6 +534,7 @@ function VideoPageContent() {
 
     setUploadedReferenceVideoAsset(null);
     setUploadedReferenceVideoPreview(null);
+    setUploadedReferenceVideoDurationSec(null);
     if (referenceVideoInputRef.current) {
       referenceVideoInputRef.current.value = '';
     }
@@ -995,6 +1109,23 @@ function VideoPageContent() {
                     </p>
                   </div>
                 )}
+
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-white/60">Motion control cost</span>
+                    <span className="font-medium text-white">
+                      {motionControlCredits ? `${motionControlCredits} credits` : 'Waiting for duration'}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-white/40">
+                    Motion control is billed at 40 credits per second of reference video.
+                  </p>
+                  {typeof activeReferenceVideoDurationSec === 'number' && activeReferenceVideoDurationSec > 0 && (
+                    <p className="mt-2 text-xs text-white/45">
+                      Reference duration: {formatDurationLabel(activeReferenceVideoDurationSec)}
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1128,8 +1259,8 @@ function VideoPageContent() {
                     ))}
                   </select>
                   <p className="mt-2 text-xs text-white/40">
-                    Match source image orientation for camera-led motion up to 10 seconds, or match
-                    the reference video orientation for more complex body motion up to 30 seconds.
+                    Match the source image orientation for camera-led motion, or match the
+                    reference video orientation for more complex body motion.
                   </p>
                 </div>
 
@@ -1163,7 +1294,13 @@ function VideoPageContent() {
               ) : (
                 <>
                   <Video className="w-5 h-5 mr-2" />
-                  Generate Video (25 credits)
+                  {`Generate Video (${
+                    videoWorkflow === 'motion-control'
+                      ? motionControlCredits
+                        ? `${motionControlCredits} credits`
+                        : '...'
+                      : '25 credits'
+                  })`}
                 </>
               )}
             </button>
@@ -1198,6 +1335,24 @@ function VideoPageContent() {
               </p>
             )}
 
+            {videoWorkflow === 'motion-control' && isResolvingReferenceVideoDuration && (
+              <p className="text-xs text-center text-white/40">
+                Reading reference video duration to calculate credits.
+              </p>
+            )}
+
+            {videoWorkflow === 'motion-control' && activeReferenceVideoAssetId && !motionControlCredits && !isResolvingReferenceVideoDuration && (
+              <p className="text-xs text-center text-white/40">
+                We could not determine the reference video length yet.
+              </p>
+            )}
+
+            {videoWorkflow === 'motion-control' && isReferenceVideoTooLong && (
+              <p className="text-xs text-center text-red-300">
+                Reference videos must be 10 seconds or shorter.
+              </p>
+            )}
+
             {activeJobId && (
               <button onClick={() => void jobQuery.refetch()} className="btn-secondary w-full">
                 <RefreshCw className="w-4 h-4 mr-2" />
@@ -1209,4 +1364,51 @@ function VideoPageContent() {
       </div>
     </div>
   );
+}
+
+function calculateMotionControlCredits(durationSec: number): number {
+  return Math.max(1, Math.ceil(durationSec)) * MOTION_CONTROL_CREDITS_PER_SECOND;
+}
+
+function formatDurationLabel(durationSec: number): string {
+  const roundedDuration = Math.max(0.1, Math.round(durationSec * 10) / 10);
+  return `${roundedDuration}s`;
+}
+
+async function resolveVideoDurationSec(url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out while reading video duration'));
+    }, 15000);
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.removeAttribute('src');
+      video.load();
+    };
+
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => {
+      const durationSec = Number(video.duration);
+      cleanup();
+
+      if (!Number.isFinite(durationSec) || durationSec <= 0) {
+        reject(new Error('Could not determine video duration'));
+        return;
+      }
+
+      resolve(durationSec);
+    };
+    video.onerror = () => {
+      cleanup();
+      reject(new Error('Failed to load video metadata'));
+    };
+    video.src = url;
+  });
 }

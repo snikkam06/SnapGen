@@ -148,6 +148,7 @@ export interface VideoGenerationInput {
   settings?: {
     workflow?: 'standard' | 'motion-control';
     durationSec?: number;
+    referenceVideoDurationSec?: number;
     aspectRatio?: string;
     motionAmount?: number;
     cameraControl?: string;
@@ -202,6 +203,7 @@ export interface AssetInfo {
   mimeType: string;
   width: number | null;
   height: number | null;
+  durationSec?: number | null;
   url: string;
   createdAt: string;
 }

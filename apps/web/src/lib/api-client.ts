@@ -198,13 +198,20 @@ class ApiClient {
         return this.uploadAsset(token, file);
     }
 
-    async uploadVideoAsset(token: TokenSource, file: File) {
-        return this.uploadAsset(token, file);
+    async uploadVideoAsset(token: TokenSource, file: File, options?: { durationSec?: number }) {
+        return this.uploadAsset(token, file, options);
     }
 
-    async uploadAsset(token: TokenSource, file: File) {
+    async uploadAsset(token: TokenSource, file: File, options?: { durationSec?: number }) {
         const formData = new FormData();
         formData.append('file', file);
+        if (
+            typeof options?.durationSec === 'number'
+            && Number.isFinite(options.durationSec)
+            && options.durationSec > 0
+        ) {
+            formData.append('durationSec', options.durationSec.toFixed(2));
+        }
         const resolvedToken = await this.resolveToken(token);
 
         const response = await fetch(`${this.baseUrl}/v1/assets/upload`, {

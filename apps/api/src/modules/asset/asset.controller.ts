@@ -8,6 +8,7 @@ import {
   Post,
   UseInterceptors,
   UploadedFile,
+  Body,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
@@ -45,6 +46,7 @@ export class AssetController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadAsset(
     @CurrentUser() user: AuthUser,
+    @Body() body: { durationSec?: string },
     @UploadedFile()
     file: {
       originalname: string;
@@ -53,7 +55,7 @@ export class AssetController {
       buffer: Buffer;
     },
   ) {
-    return this.assetService.uploadAsset(user.clerkUserId, file);
+    return this.assetService.uploadAsset(user.clerkUserId, file, body);
   }
 
   @Delete(':id')

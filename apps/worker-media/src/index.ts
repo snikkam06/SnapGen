@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Worker, Queue, Job } from 'bullmq';
-import { PrismaClient, GenerationJob } from '@prisma/client';
+import { PrismaClient, GenerationJob, Prisma } from '@prisma/client';
 import { Redis } from 'ioredis';
 import { createImageAdapter, createVideoAdapter, createFaceSwapAdapter } from '@snapgen/media-adapters';
 import {
@@ -540,7 +540,7 @@ async function failJob(
 async function saveOutputAssets(
   jobId: string,
   userId: string,
-  outputs: Array<{ url: string; mimeType: string }>,
+  outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
   kind: string,
   fallbackExt: string,
 ): Promise<void> {
@@ -556,6 +556,8 @@ async function saveOutputAssets(
         storageKey,
         mimeType: savedOutput.contentType,
         fileSizeBytes: BigInt(savedOutput.sizeBytes),
+        durationSec:
+          typeof output.durationSec === 'number' ? new Prisma.Decimal(output.durationSec.toFixed(2)) : undefined,
         moderationStatus: 'approved',
         metadataJson: savedOutput.metadataJson,
       },
@@ -571,7 +573,7 @@ async function saveOutputAssets(
 async function finalizeImageJob(
   jobId: string,
   genJob: GenerationJob,
-  outputs: Array<{ url: string; mimeType: string }>,
+  outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
   externalJobId: string,
 ): Promise<void> {
   await saveOutputAssets(jobId, genJob.userId, outputs, 'generated-image', 'png');
@@ -582,7 +584,7 @@ async function finalizeImageJob(
 async function finalizeVideoJob(
   jobId: string,
   genJob: GenerationJob,
-  outputs: Array<{ url: string; mimeType: string }>,
+  outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
   externalJobId: string,
 ): Promise<void> {
   await saveOutputAssets(jobId, genJob.userId, outputs, 'generated-video', 'mp4');
@@ -593,7 +595,7 @@ async function finalizeVideoJob(
 async function finalizeFaceSwapJob(
   jobId: string,
   genJob: GenerationJob,
-  outputs: Array<{ url: string; mimeType: string }>,
+  outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
   externalJobId: string,
 ): Promise<void> {
   await saveOutputAssets(jobId, genJob.userId, outputs, 'generated-image', 'png');

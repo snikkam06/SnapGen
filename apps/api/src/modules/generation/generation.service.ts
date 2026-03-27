@@ -38,6 +38,7 @@ const MINOR_BLOCKLIST_PATTERNS = [
   /\b(?:adolescent)\b/i,
   /\b(?:prepubescent|pubescent)\b/i,
 ];
+const MOTION_CONTROL_CREDITS_PER_SECOND = 40;
 
 function containsMinorTerms(prompt: string): boolean {
   return MINOR_BLOCKLIST_PATTERNS.some((pattern) => pattern.test(prompt));
@@ -51,13 +52,19 @@ type SavedJobOutput = {
   contentType: string;
   sizeBytes: number;
   providerUrl: string;
+  durationSec?: number;
+};
+type ProviderOutput = {
+  url: string;
+  mimeType: string;
+  durationSec?: number;
 };
 type ProviderJobWebhookUpdate = {
   provider: string;
   externalJobId: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   errorMessage?: string;
-  outputs?: Array<{ url: string; mimeType: string }>;
+  outputs?: ProviderOutput[];
 };
 
 @Injectable()
@@ -241,13 +248,17 @@ export class GenerationService {
     const provider = this.getVideoProviderForWorkflow(workflow);
     this.ensureProviderConfigured(provider, 'video');
     await this.requireQueueOrInline('video');
-    const totalCost = CREDIT_COSTS.video;
     const sourceImageAsset = sourceAssetId
       ? await this.resolveUserImageAsset(user.id, sourceAssetId)
       : null;
     const referenceVideoAsset = referenceVideoAssetId
       ? await this.resolveUserVideoAsset(user.id, referenceVideoAssetId)
       : null;
+    const referenceVideoDurationSec = this.resolveMotionControlReferenceDurationSec(
+      workflow,
+      referenceVideoAsset?.durationSec,
+      data.settings?.referenceVideoDurationSec,
+    );
 
     if (workflow === 'motion-control') {
       if (!sourceImageAsset) {
@@ -258,6 +269,11 @@ export class GenerationService {
         throw new BadRequestException('Reference video is required for motion control.');
       }
     }
+
+    const totalCost =
+      workflow === 'motion-control'
+        ? this.calculateMotionControlCredits(referenceVideoDurationSec)
+        : CREDIT_COSTS.video;
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
       await this.lockUserCredits(tx, user.id);
@@ -280,6 +296,7 @@ export class GenerationService {
             sourceImageUrl: sourceImageAsset?.url,
             referenceVideoAssetId: referenceVideoAsset?.id,
             referenceVideoUrl: referenceVideoAsset?.url,
+            referenceVideoDurationSec,
           } as Prisma.InputJsonValue,
           provider,
           reservedCredits: totalCost,
@@ -508,7 +525,7 @@ export class GenerationService {
     initialStatus: 'queued' | 'running' | 'completed',
   ): Promise<{
     status: 'queued' | 'running' | 'completed' | 'failed';
-    outputs?: Array<{ url: string; mimeType: string }>;
+    outputs?: ProviderOutput[];
     errorMessage?: string;
   }> {
     let jobResult =
@@ -678,7 +695,7 @@ export class GenerationService {
     | { status: 'queued' | 'running' }
     | {
         status: 'completed' | 'failed';
-        outputs?: Array<{ url: string; mimeType: string }>;
+        outputs?: ProviderOutput[];
         errorMessage?: string;
       }
   > {
@@ -708,6 +725,7 @@ export class GenerationService {
           outputs: result.outputs?.map((output) => ({
             url: output.url,
             mimeType: output.mimeType,
+            durationSec: output.durationSec,
           })),
           errorMessage: result.errorMessage,
         };
@@ -729,7 +747,7 @@ export class GenerationService {
 
   private async completeJobWithOutputs(
     genJob: GenerationJob,
-    outputs: Array<{ url: string; mimeType: string }>,
+    outputs: ProviderOutput[],
     assetKind: 'generated-image' | 'generated-video',
     fallbackExtension: string,
     externalJobId: string,
@@ -1336,7 +1354,7 @@ export class GenerationService {
   private async saveOutputsToStorage(
     jobId: string,
     userId: string,
-    outputs: Array<{ url: string; mimeType: string }>,
+    outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
     fallbackExtension: string,
   ): Promise<SavedJobOutput[]> {
     const savedOutputs: SavedJobOutput[] = [];
@@ -1358,6 +1376,7 @@ export class GenerationService {
           contentType: savedOutput.contentType,
           sizeBytes: savedOutput.sizeBytes,
           providerUrl: output.url,
+          durationSec: output.durationSec,
         });
       }
     } catch (error) {
@@ -1384,6 +1403,10 @@ export class GenerationService {
           storageKey: output.storageKey,
           mimeType: output.contentType,
           fileSizeBytes: BigInt(output.sizeBytes),
+          durationSec:
+            typeof output.durationSec === 'number'
+              ? new Prisma.Decimal(output.durationSec.toFixed(2))
+              : undefined,
           moderationStatus: 'approved',
           metadataJson: { providerUrl: output.providerUrl },
         },
@@ -1880,7 +1903,7 @@ export class GenerationService {
   private async resolveUserVideoAsset(
     userId: string,
     assetId: string,
-  ): Promise<{ id: string; url: string }> {
+  ): Promise<{ id: string; url: string; durationSec: number | null }> {
     const asset = await this.prisma.asset.findFirst({
       where: {
         id: assetId,
@@ -1900,6 +1923,36 @@ export class GenerationService {
     return {
       id: asset.id,
       url: await this.storageService.getAssetUrl(asset),
+      durationSec: asset.durationSec ? Number(asset.durationSec) : null,
     };
+  }
+
+  private calculateMotionControlCredits(durationSec: number): number {
+    return Math.max(1, Math.ceil(durationSec)) * MOTION_CONTROL_CREDITS_PER_SECOND;
+  }
+
+  private resolveMotionControlReferenceDurationSec(
+    workflow: VideoGenerationWorkflow,
+    assetDurationSec: number | null | undefined,
+    settingsDurationSec: unknown,
+  ): number {
+    if (workflow !== 'motion-control') {
+      return 0;
+    }
+
+    const resolvedDurationSec =
+      typeof assetDurationSec === 'number' && Number.isFinite(assetDurationSec) && assetDurationSec > 0
+        ? assetDurationSec
+        : typeof settingsDurationSec === 'number' && Number.isFinite(settingsDurationSec) && settingsDurationSec > 0
+          ? settingsDurationSec
+          : NaN;
+
+    if (!Number.isFinite(resolvedDurationSec)) {
+      throw new BadRequestException(
+        'Reference video duration is unavailable. Re-upload the video or choose a different reference.',
+      );
+    }
+
+    return resolvedDurationSec;
   }
 }

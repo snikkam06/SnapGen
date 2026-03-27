@@ -126,6 +126,9 @@ export class AssetService {
       size: number;
       buffer: Buffer;
     },
+    metadata?: {
+      durationSec?: string;
+    },
   ) {
     if (!file) {
       throw new BadRequestException('No file provided');
@@ -163,6 +166,7 @@ export class AssetService {
         storageKey,
         mimeType: file.mimetype,
         fileSizeBytes: BigInt(file.size),
+        durationSec: this.parseOptionalDurationSec(metadata?.durationSec),
         moderationStatus: 'approved',
         metadataJson: {
           originalFileName: file.originalname,
@@ -172,6 +176,19 @@ export class AssetService {
     });
 
     return this.serializeAsset(asset);
+  }
+
+  private parseOptionalDurationSec(value: string | undefined): Prisma.Decimal | undefined {
+    if (!value?.trim()) {
+      return undefined;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return undefined;
+    }
+
+    return new Prisma.Decimal(parsed.toFixed(2));
   }
 
   async remove(clerkUserId: string, id: string) {
