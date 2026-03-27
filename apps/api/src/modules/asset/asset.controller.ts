@@ -40,10 +40,10 @@ export class AssetController {
   }
 
   @Post('upload')
-  @ApiOperation({ summary: 'Upload an image asset directly' })
+  @ApiOperation({ summary: 'Upload an asset directly' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file'))
-  async uploadImage(
+  async uploadAsset(
     @CurrentUser() user: AuthUser,
     @UploadedFile()
     file: {
@@ -53,7 +53,7 @@ export class AssetController {
       buffer: Buffer;
     },
   ) {
-    return this.assetService.uploadImage(user.clerkUserId, file);
+    return this.assetService.uploadAsset(user.clerkUserId, file);
   }
 
   @Delete(':id')

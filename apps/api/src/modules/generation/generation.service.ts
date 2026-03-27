@@ -43,6 +43,7 @@ function containsMinorTerms(prompt: string): boolean {
   return MINOR_BLOCKLIST_PATTERNS.some((pattern) => pattern.test(prompt));
 }
 type ImageGenerationMode = 'base' | 'enhanced';
+type VideoGenerationWorkflow = 'standard' | 'motion-control';
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 type SavedJobOutput = {
   bucket: string;
@@ -197,6 +198,7 @@ export class GenerationService {
       characterId?: string;
       prompt: string;
       sourceAssetId?: string;
+      referenceVideoAssetId?: string;
       settings?: Record<string, unknown>;
     },
   ) {
@@ -206,7 +208,29 @@ export class GenerationService {
 
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const sourceAssetId = assertOptionalUuid(data.sourceAssetId, 'sourceAssetId');
-    const prompt = assertNonEmptyString(data.prompt, 'prompt');
+    const referenceVideoAssetId = assertOptionalUuid(
+      data.referenceVideoAssetId,
+      'referenceVideoAssetId',
+    );
+    const workflow = this.normalizeVideoWorkflow(data.settings?.workflow);
+    const prompt = typeof data.prompt === 'string' ? data.prompt.trim() : '';
+    const cameraControl =
+      typeof data.settings?.cameraControl === 'string' ? data.settings.cameraControl : undefined;
+
+    if (workflow === 'standard' && !sourceAssetId && !prompt) {
+      throw new BadRequestException('Prompt is required for text-to-video generation.');
+    }
+
+    if (
+      workflow === 'standard'
+      && sourceAssetId
+      && !prompt
+      && (!cameraControl || cameraControl === 'none')
+    ) {
+      throw new BadRequestException(
+        'Provide a motion prompt or camera control for image-to-video generation.',
+      );
+    }
 
     if (containsMinorTerms(prompt)) {
       throw new BadRequestException('Prompt rejected: content referencing minors is not allowed.');
@@ -214,13 +238,26 @@ export class GenerationService {
 
     await this.assertCharacterExists(user.id, characterId);
 
-    const provider = this.getVideoProvider();
+    const provider = this.getVideoProviderForWorkflow(workflow);
     this.ensureProviderConfigured(provider, 'video');
     await this.requireQueueOrInline('video');
     const totalCost = CREDIT_COSTS.video;
     const sourceImageAsset = sourceAssetId
       ? await this.resolveUserImageAsset(user.id, sourceAssetId)
       : null;
+    const referenceVideoAsset = referenceVideoAssetId
+      ? await this.resolveUserVideoAsset(user.id, referenceVideoAssetId)
+      : null;
+
+    if (workflow === 'motion-control') {
+      if (!sourceImageAsset) {
+        throw new BadRequestException('Source image is required for motion control.');
+      }
+
+      if (!referenceVideoAsset) {
+        throw new BadRequestException('Reference video is required for motion control.');
+      }
+    }
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
       await this.lockUserCredits(tx, user.id);
@@ -235,11 +272,14 @@ export class GenerationService {
           characterId: characterId || null,
           jobType: 'video',
           status: 'queued',
-          prompt,
+          prompt: prompt || null,
           settingsJson: {
             ...(data.settings || {}),
+            workflow,
             sourceAssetId: sourceImageAsset?.id,
             sourceImageUrl: sourceImageAsset?.url,
+            referenceVideoAssetId: referenceVideoAsset?.id,
+            referenceVideoUrl: referenceVideoAsset?.url,
           } as Prisma.InputJsonValue,
           provider,
           reservedCredits: totalCost,
@@ -262,6 +302,16 @@ export class GenerationService {
           data: {
             jobId: createdJob.id,
             assetId: sourceImageAsset.id,
+            relation: 'input',
+          },
+        });
+      }
+
+      if (referenceVideoAsset) {
+        await tx.jobAsset.create({
+          data: {
+            jobId: createdJob.id,
+            assetId: referenceVideoAsset.id,
             relation: 'input',
           },
         });
@@ -1422,6 +1472,14 @@ export class GenerationService {
     return 'mock';
   }
 
+  private getVideoProviderForWorkflow(workflow: VideoGenerationWorkflow): string {
+    if (workflow === 'motion-control') {
+      return 'fal';
+    }
+
+    return this.getVideoProvider();
+  }
+
   private getVideoProviderApiKey(provider: string): string {
     switch (provider) {
       case 'fal':
@@ -1479,11 +1537,15 @@ export class GenerationService {
       const createdJob = await adapter.createJob({
         prompt: genJob.prompt || '',
         sourceImageUrl: settings.sourceImageUrl as string | undefined,
+        referenceVideoUrl: settings.referenceVideoUrl as string | undefined,
         aspectRatio: settings.aspectRatio as string | undefined,
         durationSec: settings.durationSec as number | undefined,
         settings: {
+          workflow: settings.workflow,
           motionAmount: settings.motionAmount,
           cameraControl: settings.cameraControl,
+          characterOrientation: settings.characterOrientation,
+          keepOriginalSound: settings.keepOriginalSound,
         },
       });
 
@@ -1803,6 +1865,36 @@ export class GenerationService {
 
     if (!asset.mimeType.startsWith('image/')) {
       throw new BadRequestException('Source asset must be an image');
+    }
+
+    return {
+      id: asset.id,
+      url: await this.storageService.getAssetUrl(asset),
+    };
+  }
+
+  private normalizeVideoWorkflow(value: unknown): VideoGenerationWorkflow {
+    return value === 'motion-control' ? 'motion-control' : 'standard';
+  }
+
+  private async resolveUserVideoAsset(
+    userId: string,
+    assetId: string,
+  ): Promise<{ id: string; url: string }> {
+    const asset = await this.prisma.asset.findFirst({
+      where: {
+        id: assetId,
+        userId,
+        moderationStatus: { not: 'deleted' },
+      },
+    });
+
+    if (!asset) {
+      throw new NotFoundException('Reference video not found');
+    }
+
+    if (!asset.mimeType.startsWith('video/')) {
+      throw new BadRequestException('Reference asset must be a video');
     }
 
     return {

@@ -45,6 +45,7 @@ export class GenerationController {
       characterId?: string;
       prompt: string;
       sourceAssetId?: string;
+      referenceVideoAssetId?: string;
       settings?: Record<string, unknown>;
     },
   ) {

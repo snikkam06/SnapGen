@@ -118,7 +118,7 @@ export class AssetService {
     };
   }
 
-  async uploadImage(
+  async uploadAsset(
     clerkUserId: string,
     file: {
       originalname: string;
@@ -132,8 +132,12 @@ export class AssetService {
     }
 
     const allowedImageTypes = UPLOAD_LIMITS.allowedImageTypes as readonly string[];
-    if (!allowedImageTypes.includes(file.mimetype)) {
-      throw new BadRequestException('Please upload a JPEG, PNG, or WebP image');
+    const allowedVideoTypes = UPLOAD_LIMITS.allowedVideoTypes as readonly string[];
+    const isImage = allowedImageTypes.includes(file.mimetype);
+    const isVideo = allowedVideoTypes.includes(file.mimetype);
+
+    if (!isImage && !isVideo) {
+      throw new BadRequestException('Please upload a JPEG, PNG, WebP, MP4, or WebM file');
     }
 
     if (file.size > UPLOAD_LIMITS.maxFileSizeBytes) {
@@ -145,14 +149,16 @@ export class AssetService {
 
     const bucket = process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.uploads;
     const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const storageKey = `users/${user.id}/uploads/images/${Date.now()}-${sanitizedFileName}`;
+    const assetDirectory = isVideo ? 'videos' : 'images';
+    const assetKind = isVideo ? 'uploaded-video' : 'uploaded-image';
+    const storageKey = `users/${user.id}/uploads/${assetDirectory}/${Date.now()}-${sanitizedFileName}`;
 
     await this.storageService.saveBuffer(bucket, storageKey, file.buffer, file.mimetype);
 
     const asset = await this.prisma.asset.create({
       data: {
         userId: user.id,
-        kind: 'uploaded-image',
+        kind: assetKind,
         storageBucket: bucket,
         storageKey,
         mimeType: file.mimetype,

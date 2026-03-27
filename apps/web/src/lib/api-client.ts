@@ -195,6 +195,14 @@ class ApiClient {
     }
 
     async uploadImageAsset(token: TokenSource, file: File) {
+        return this.uploadAsset(token, file);
+    }
+
+    async uploadVideoAsset(token: TokenSource, file: File) {
+        return this.uploadAsset(token, file);
+    }
+
+    async uploadAsset(token: TokenSource, file: File) {
         const formData = new FormData();
         formData.append('file', file);
         const resolvedToken = await this.resolveToken(token);

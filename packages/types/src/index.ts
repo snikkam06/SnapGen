@@ -144,11 +144,15 @@ export interface VideoGenerationInput {
   characterId?: string;
   prompt: string;
   sourceAssetId?: string;
+  referenceVideoAssetId?: string;
   settings?: {
+    workflow?: 'standard' | 'motion-control';
     durationSec?: number;
     aspectRatio?: string;
     motionAmount?: number;
     cameraControl?: string;
+    characterOrientation?: 'image' | 'video';
+    keepOriginalSound?: boolean;
   };
 }
 

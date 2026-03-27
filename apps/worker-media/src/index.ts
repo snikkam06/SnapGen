@@ -811,12 +811,16 @@ async function bootstrap() {
           result = await adapter.createJob({
             prompt: genJob.prompt || '',
             sourceImageUrl: settings.sourceImageUrl as string | undefined,
+            referenceVideoUrl: settings.referenceVideoUrl as string | undefined,
             aspectRatio: settings.aspectRatio as string | undefined,
             durationSec: settings.durationSec as number | undefined,
             webhookUrl,
             settings: {
+              workflow: settings.workflow,
               motionAmount: settings.motionAmount,
               cameraControl: settings.cameraControl,
+              characterOrientation: settings.characterOrientation,
+              keepOriginalSound: settings.keepOriginalSound,
             },
           });
         } finally {

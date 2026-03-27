@@ -36,6 +36,7 @@ export interface ImageGenerationAdapter {
 export interface VideoGenerationInput {
   prompt: string;
   sourceImageUrl?: string;
+  referenceVideoUrl?: string;
   webhookUrl?: string;
   aspectRatio?: string;
   durationSec?: number;
@@ -205,9 +206,10 @@ const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const FAL_STATUS_HANDLE_PREFIX = 'fal-status:';
 const FAL_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const FAL_TARGET_UPLOAD_BYTES = Math.floor(FAL_MAX_UPLOAD_BYTES * 0.9);
+const FAL_VIDEO_MAX_INPUT_DIMENSION = 3850;
 const FAL_OPTIMIZED_IMAGE_CONTENT_TYPE = 'image/webp';
 const FAL_IMAGE_QUALITY_STEPS = [90, 84, 78, 72, 66];
-const FAL_IMAGE_MAX_DIMENSION_STEPS = [2048, 1792, 1536, 1280, 1024, 768];
+const FAL_IMAGE_MAX_DIMENSION_STEPS = [3850, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 768];
 
 function ensureFalApiKey(apiKey: string, capability: string): void {
   if (!apiKey) {
@@ -230,7 +232,15 @@ function isImageMimeType(mimeType: string | null): boolean {
   return Boolean(mimeType && mimeType.startsWith('image/'));
 }
 
-async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string): Promise<string> {
+type FalImageNormalizationOptions = {
+  maxDimension?: number;
+};
+
+async function normalizeFalInputImageUrl(
+  apiKey: string,
+  sourceImageUrl: string,
+  options?: FalImageNormalizationOptions,
+): Promise<string> {
   ensureFalApiKey(apiKey, 'fal.ai file upload');
 
   const response = await fetch(sourceImageUrl);
@@ -246,14 +256,19 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   }
 
   const originalBuffer = Buffer.from(await response.arrayBuffer());
-  if (originalBuffer.byteLength <= FAL_MAX_UPLOAD_BYTES) {
+  const metadata = await sharp(originalBuffer, { failOn: 'none' }).metadata();
+  const exceedsDimensionLimit =
+    typeof options?.maxDimension === 'number'
+    && ((metadata.width ?? 0) > options.maxDimension || (metadata.height ?? 0) > options.maxDimension);
+
+  if (!exceedsDimensionLimit && originalBuffer.byteLength <= FAL_MAX_UPLOAD_BYTES) {
     return sourceImageUrl;
   }
 
-  const optimizedImage = await optimizeImageForFalUpload(originalBuffer);
+  const optimizedImage = await optimizeImageForFalUpload(originalBuffer, options?.maxDimension);
   if (optimizedImage.byteLength > FAL_MAX_UPLOAD_BYTES) {
     throw new Error(
-      'Source image is too large for Fal video generation even after optimization. Try a smaller image.',
+      'Source image is too large for Fal processing even after optimization. Try a smaller image.',
     );
   }
 
@@ -263,16 +278,27 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   });
 }
 
-async function optimizeImageForFalUpload(buffer: Buffer): Promise<Buffer> {
+function getFalImageDimensionSteps(maxDimension?: number): number[] {
+  if (typeof maxDimension !== 'number') {
+    return FAL_IMAGE_MAX_DIMENSION_STEPS;
+  }
+
+  const filteredSteps = FAL_IMAGE_MAX_DIMENSION_STEPS.filter((step) => step <= maxDimension);
+  return filteredSteps.length > 0 && filteredSteps[0] === maxDimension
+    ? filteredSteps
+    : [maxDimension, ...filteredSteps];
+}
+
+async function optimizeImageForFalUpload(buffer: Buffer, maxDimension?: number): Promise<Buffer> {
   let smallestBuffer: Buffer | null = null;
 
-  for (const maxDimension of FAL_IMAGE_MAX_DIMENSION_STEPS) {
+  for (const candidateMaxDimension of getFalImageDimensionSteps(maxDimension)) {
     for (const quality of FAL_IMAGE_QUALITY_STEPS) {
       const candidate = await sharp(buffer, { failOn: 'none' })
         .rotate()
         .resize({
-          width: maxDimension,
-          height: maxDimension,
+          width: candidateMaxDimension,
+          height: candidateMaxDimension,
           fit: 'inside',
           withoutEnlargement: true,
         })
@@ -1265,6 +1291,7 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
   private apiKey: string;
   private textToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/text-to-video';
   private imageToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/image-to-video';
+  private motionControlSubmitEndpointPath = 'fal-ai/kling-video/v3/pro/motion-control';
   private queueEndpointPath = 'fal-ai/kling-video';
 
   constructor(apiKey: string) {
@@ -1275,33 +1302,71 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     externalJobId: string;
     status: 'queued' | 'running' | 'completed';
   }> {
+    const workflow =
+      input.settings?.workflow === 'motion-control' ? 'motion-control' : 'standard';
     const sourceImageUrl = input.sourceImageUrl
-      ? await normalizeFalInputImageUrl(this.apiKey, input.sourceImageUrl)
+      ? await normalizeFalInputImageUrl(this.apiKey, input.sourceImageUrl, {
+          maxDimension: FAL_VIDEO_MAX_INPUT_DIMENSION,
+        })
       : undefined;
-    const endpointPath = sourceImageUrl
-      ? this.imageToVideoSubmitEndpointPath
-      : this.textToVideoSubmitEndpointPath;
+    const referenceVideoUrl =
+      workflow === 'motion-control' && typeof input.referenceVideoUrl === 'string'
+        ? input.referenceVideoUrl
+        : undefined;
+    const endpointPath =
+      workflow === 'motion-control'
+        ? this.motionControlSubmitEndpointPath
+        : sourceImageUrl
+          ? this.imageToVideoSubmitEndpointPath
+          : this.textToVideoSubmitEndpointPath;
     const motionAmount =
       typeof input.settings?.motionAmount === 'number' ? input.settings.motionAmount : undefined;
+    const builtPrompt = this.buildPrompt(
+      input.prompt,
+      typeof input.settings?.cameraControl === 'string'
+        ? input.settings.cameraControl
+        : undefined,
+      Boolean(sourceImageUrl),
+    );
 
-    const data = await submitFalQueueRequest(this.apiKey, endpointPath, {
-      prompt: this.buildPrompt(
-        input.prompt,
-        typeof input.settings?.cameraControl === 'string'
-          ? input.settings.cameraControl
-          : undefined,
-      ),
-      ...(sourceImageUrl ? { start_image_url: sourceImageUrl } : {}),
-      duration: `${input.durationSec ?? 5}`,
-      aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
-      generate_audio: false,
-      ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
-      ...(motionAmount != null
+    if (workflow === 'motion-control') {
+      if (!sourceImageUrl) {
+        throw new Error('Fal motion control requires a source image');
+      }
+
+      if (!referenceVideoUrl) {
+        throw new Error('Fal motion control requires a reference video');
+      }
+    }
+
+    const data = await submitFalQueueRequest(
+      this.apiKey,
+      endpointPath,
+      workflow === 'motion-control'
         ? {
-          cfg_scale: Math.max(0, Math.min(1, motionAmount / 10)),
-        }
-        : {}),
-    });
+            ...(builtPrompt ? { prompt: builtPrompt } : {}),
+            image_url: sourceImageUrl,
+            video_url: referenceVideoUrl,
+            keep_original_sound: input.settings?.keepOriginalSound !== false,
+            character_orientation: this.normalizeCharacterOrientation(
+              input.settings?.characterOrientation,
+            ),
+            ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
+          }
+        : {
+            ...(builtPrompt ? { prompt: builtPrompt } : {}),
+            ...(sourceImageUrl ? { start_image_url: sourceImageUrl } : {}),
+            duration: `${input.durationSec ?? 5}`,
+            aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
+            generate_audio: false,
+            ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
+            ...(motionAmount != null
+              ? {
+                  cfg_scale: Math.max(0, Math.min(1, motionAmount / 10)),
+                }
+              : {}),
+          },
+    );
     const status = mapFalStatus(data.status);
 
     if (status === 'failed') {
@@ -1312,7 +1377,9 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
       externalJobId:
         data.status_url && data.request_id
           ? encodeFalStatusHandle(data.status_url, data.request_id)
-          : data.request_id ?? data.response_url ?? `fal-video-${Date.now()}`,
+          : data.request_id
+            ? this.encodeExternalJobId(endpointPath, data.request_id)
+            : data.response_url ?? `fal-video-${Date.now()}`,
       status,
     };
   }
@@ -1387,9 +1454,12 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     return ratio && allowedRatios.has(ratio) ? ratio : '16:9';
   }
 
-  private buildPrompt(prompt: string, cameraControl?: string): string {
+  private buildPrompt(prompt: string, cameraControl?: string, hasSourceImage = false): string {
+    const trimmedPrompt = prompt.trim();
+    const basePrompt = trimmedPrompt || (hasSourceImage ? 'Preserve the source image and animate it naturally.' : '');
+
     if (!cameraControl || cameraControl === 'none') {
-      return prompt;
+      return basePrompt;
     }
 
     const cameraPrompts: Record<string, string> = {
@@ -1403,10 +1473,14 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
 
     const cameraPrompt = cameraPrompts[cameraControl];
     if (!cameraPrompt) {
-      return prompt;
+      return basePrompt;
     }
 
-    return `${prompt}\n\n${cameraPrompt}`;
+    return [basePrompt, cameraPrompt].filter(Boolean).join('\n\n');
+  }
+
+  private normalizeCharacterOrientation(value: unknown): 'image' | 'video' {
+    return value === 'video' ? 'video' : 'image';
   }
 
   private encodeExternalJobId(endpointPath: string, jobId: string): string {
