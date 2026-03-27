@@ -38,7 +38,10 @@ const MINOR_BLOCKLIST_PATTERNS = [
   /\b(?:adolescent)\b/i,
   /\b(?:prepubescent|pubescent)\b/i,
 ];
-const MOTION_CONTROL_CREDITS_PER_SECOND = 40;
+const MOTION_CONTROL_CREDITS_PER_SECOND = {
+  withAudio: 38,
+  withoutAudio: 26,
+} as const;
 
 function containsMinorTerms(prompt: string): boolean {
   return MINOR_BLOCKLIST_PATTERNS.some((pattern) => pattern.test(prompt));
@@ -259,6 +262,7 @@ export class GenerationService {
       referenceVideoAsset?.durationSec,
       data.settings?.referenceVideoDurationSec,
     );
+    const keepOriginalSound = data.settings?.keepOriginalSound !== false;
 
     if (workflow === 'motion-control') {
       if (!sourceImageAsset) {
@@ -272,7 +276,7 @@ export class GenerationService {
 
     const totalCost =
       workflow === 'motion-control'
-        ? this.calculateMotionControlCredits(referenceVideoDurationSec)
+        ? this.calculateMotionControlCredits(referenceVideoDurationSec, keepOriginalSound)
         : CREDIT_COSTS.video;
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
@@ -1927,8 +1931,12 @@ export class GenerationService {
     };
   }
 
-  private calculateMotionControlCredits(durationSec: number): number {
-    return Math.max(1, Math.ceil(durationSec)) * MOTION_CONTROL_CREDITS_PER_SECOND;
+  private calculateMotionControlCredits(durationSec: number, keepOriginalSound: boolean): number {
+    const perSecondRate = keepOriginalSound
+      ? MOTION_CONTROL_CREDITS_PER_SECOND.withAudio
+      : MOTION_CONTROL_CREDITS_PER_SECOND.withoutAudio;
+
+    return Math.max(1, Math.ceil(durationSec)) * perSecondRate;
   }
 
   private resolveMotionControlReferenceDurationSec(

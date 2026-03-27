@@ -47,7 +47,10 @@ const characterOrientations = [
 
 const JOB_STATUS_FALLBACK_POLL_MS = 5000;
 const JOB_STATUS_TIMEOUT_MS = 15 * 60 * 1000;
-const MOTION_CONTROL_CREDITS_PER_SECOND = 40;
+const MOTION_CONTROL_CREDITS_PER_SECOND = {
+  withAudio: 38,
+  withoutAudio: 26,
+} as const;
 const MAX_REFERENCE_VIDEO_DURATION_SEC = 10;
 
 type VideoMode = 'text' | 'image';
@@ -416,7 +419,7 @@ function VideoPageContent() {
     && activeReferenceVideoDurationSec > MAX_REFERENCE_VIDEO_DURATION_SEC;
   const motionControlCredits =
     typeof activeReferenceVideoDurationSec === 'number' && activeReferenceVideoDurationSec > 0
-      ? calculateMotionControlCredits(activeReferenceVideoDurationSec)
+      ? calculateMotionControlCredits(activeReferenceVideoDurationSec, keepOriginalSound)
       : null;
   const canGenerate =
     videoWorkflow === 'motion-control'
@@ -1118,7 +1121,8 @@ function VideoPageContent() {
                     </span>
                   </div>
                   <p className="mt-2 text-xs text-white/40">
-                    Motion control is billed at 40 credits per second of reference video.
+                    Motion control is billed at 38 credits/sec with original sound, or 26
+                    credits/sec without it.
                   </p>
                   {typeof activeReferenceVideoDurationSec === 'number' && activeReferenceVideoDurationSec > 0 && (
                     <p className="mt-2 text-xs text-white/45">
@@ -1366,8 +1370,12 @@ function VideoPageContent() {
   );
 }
 
-function calculateMotionControlCredits(durationSec: number): number {
-  return Math.max(1, Math.ceil(durationSec)) * MOTION_CONTROL_CREDITS_PER_SECOND;
+function calculateMotionControlCredits(durationSec: number, keepOriginalSound: boolean): number {
+  const perSecondRate = keepOriginalSound
+    ? MOTION_CONTROL_CREDITS_PER_SECOND.withAudio
+    : MOTION_CONTROL_CREDITS_PER_SECOND.withoutAudio;
+
+  return Math.max(1, Math.ceil(durationSec)) * perSecondRate;
 }
 
 function formatDurationLabel(durationSec: number): string {
