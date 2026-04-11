@@ -1,0 +1,41 @@
+name: Uptime Check
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
+      ALERT_WEBHOOK_URL: ${{ secrets.UPTIME_ALERT_WEBHOOK_URL }}
+    steps:
+      - name: Skip when URL is not configured
+        if: env.HEALTHCHECK_URL == ''
+        run: echo "HEALTHCHECK_URL repository variable is not set; skipping uptime probe."
+
+      - name: Probe health endpoint
+        if: env.HEALTHCHECK_URL != ''
+        run: |
+          status_code="$(curl --silent --show-error --max-time 20 --output response.json --write-out '%{http_code}' "$HEALTHCHECK_URL")"
+          cat response.json
+          if [ "$status_code" -ne 200 ]; then
+            echo "Healthcheck failed with status $status_code"
+            exit 1
+          fi
+
+      - name: Notify webhook on failure
+        if: failure() && env.HEALTHCHECK_URL != '' && env.ALERT_WEBHOOK_URL != ''
+        run: |
+          payload="$(jq -n \
+            --arg url "$HEALTHCHECK_URL" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{text: ("SnapGen uptime check failed for " + $url + "\nRun: " + $run_url)}')"
+          curl --silent --show-error -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$payload" \
+            "$ALERT_WEBHOOK_URL"

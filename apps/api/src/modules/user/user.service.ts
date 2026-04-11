@@ -28,6 +28,11 @@ export class UserService {
                 code: user.subscription?.planCode || 'free',
                 name: this.getPlanName(user.subscription?.planCode || 'free'),
             },
+            subscription: user.subscription ? {
+                status: user.subscription.status,
+                currentPeriodEnd: user.subscription.currentPeriodEnd?.toISOString() || null,
+                cancelAtPeriodEnd: user.subscription.cancelAtPeriodEnd,
+            } : null,
         };
     }
 
@@ -53,9 +58,14 @@ export class UserService {
     private getPlanName(code: string): string {
         const names: Record<string, string> = {
             free: 'Free',
+            'basic-monthly': 'Basic',
+            'basic-yearly': 'Basic',
             'creator-monthly': 'Creator',
+            'creator-yearly': 'Creator',
             'pro-monthly': 'Pro',
+            'pro-yearly': 'Pro',
             'business-monthly': 'Business',
+            'business-yearly': 'Business',
         };
         return names[code] || 'Unknown';
     }

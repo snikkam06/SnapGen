@@ -1,26 +1,21 @@
 'use client';
 
 import { useAuth } from '@clerk/nextjs';
-import { useQuery } from '@tanstack/react-query';
 
-export function useApiToken() {
-    const { getToken, isLoaded, userId } = useAuth();
+interface ApiTokenState {
+  getToken: () => Promise<string | null>;
+  isPending: boolean;
+  isReady: boolean;
+  userId: string | null;
+}
 
-    return useQuery({
-        queryKey: ['api-token', userId],
-        enabled: isLoaded && !!userId,
-        staleTime: 0,
-        refetchInterval: 30 * 1000,
-        refetchIntervalInBackground: true,
-        refetchOnMount: true,
-        refetchOnWindowFocus: true,
-        queryFn: async () => {
-            const token = await getToken();
-            if (!token) {
-                throw new Error('Authentication token unavailable');
-            }
+export function useApiToken(): ApiTokenState {
+  const { getToken, isLoaded, userId } = useAuth();
 
-            return token;
-        },
-    });
+  return {
+    getToken: () => getToken(),
+    isPending: !isLoaded,
+    isReady: isLoaded && !!userId,
+    userId: userId ?? null,
+  };
 }

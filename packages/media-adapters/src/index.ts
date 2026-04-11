@@ -9,6 +9,7 @@ export interface ImageGenerationInput {
   prompt: string;
   negativePrompt?: string;
   referenceImages?: string[];
+  webhookUrl?: string;
   loraModelUrl?: string;
   aspectRatio?: string;
   seed?: number;
@@ -35,6 +36,8 @@ export interface ImageGenerationAdapter {
 export interface VideoGenerationInput {
   prompt: string;
   sourceImageUrl?: string;
+  referenceVideoUrl?: string;
+  webhookUrl?: string;
   aspectRatio?: string;
   durationSec?: number;
   settings?: Record<string, unknown>;
@@ -57,6 +60,7 @@ export interface VideoGenerationAdapter {
 export interface FaceSwapInput {
   sourceFaceUrl: string;
   targetImageUrl: string;
+  webhookUrl?: string;
 }
 
 export interface FaceSwapAdapter {
@@ -96,6 +100,8 @@ export interface TrainingAdapter {
 interface FalCreateJobResponse {
   request_id?: string;
   response_url?: string;
+  status_url?: string;
+  cancel_url?: string;
   status?: string;
 }
 
@@ -197,11 +203,13 @@ const FAL_DEFAULT_NEGATIVE_PROMPT =
   'child, children, minor, underage, teenager, teen, young girl, young boy, infant, toddler, kid, under 18, petite young, baby face, childlike, youthful face, adolescent, prepubescent, small frame child, schoolgirl, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
+const FAL_STATUS_HANDLE_PREFIX = 'fal-status:';
 const FAL_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const FAL_TARGET_UPLOAD_BYTES = Math.floor(FAL_MAX_UPLOAD_BYTES * 0.9);
+const FAL_VIDEO_MAX_INPUT_DIMENSION = 3850;
 const FAL_OPTIMIZED_IMAGE_CONTENT_TYPE = 'image/webp';
 const FAL_IMAGE_QUALITY_STEPS = [90, 84, 78, 72, 66];
-const FAL_IMAGE_MAX_DIMENSION_STEPS = [2048, 1792, 1536, 1280, 1024, 768];
+const FAL_IMAGE_MAX_DIMENSION_STEPS = [3850, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 768];
 
 function ensureFalApiKey(apiKey: string, capability: string): void {
   if (!apiKey) {
@@ -224,7 +232,15 @@ function isImageMimeType(mimeType: string | null): boolean {
   return Boolean(mimeType && mimeType.startsWith('image/'));
 }
 
-async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string): Promise<string> {
+type FalImageNormalizationOptions = {
+  maxDimension?: number;
+};
+
+async function normalizeFalInputImageUrl(
+  apiKey: string,
+  sourceImageUrl: string,
+  options?: FalImageNormalizationOptions,
+): Promise<string> {
   ensureFalApiKey(apiKey, 'fal.ai file upload');
 
   const response = await fetch(sourceImageUrl);
@@ -240,14 +256,19 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   }
 
   const originalBuffer = Buffer.from(await response.arrayBuffer());
-  if (originalBuffer.byteLength <= FAL_MAX_UPLOAD_BYTES) {
+  const metadata = await sharp(originalBuffer, { failOn: 'none' }).metadata();
+  const exceedsDimensionLimit =
+    typeof options?.maxDimension === 'number'
+    && ((metadata.width ?? 0) > options.maxDimension || (metadata.height ?? 0) > options.maxDimension);
+
+  if (!exceedsDimensionLimit && originalBuffer.byteLength <= FAL_MAX_UPLOAD_BYTES) {
     return sourceImageUrl;
   }
 
-  const optimizedImage = await optimizeImageForFalUpload(originalBuffer);
+  const optimizedImage = await optimizeImageForFalUpload(originalBuffer, options?.maxDimension);
   if (optimizedImage.byteLength > FAL_MAX_UPLOAD_BYTES) {
     throw new Error(
-      'Source image is too large for Fal video generation even after optimization. Try a smaller image.',
+      'Source image is too large for Fal processing even after optimization. Try a smaller image.',
     );
   }
 
@@ -257,16 +278,27 @@ async function normalizeFalInputImageUrl(apiKey: string, sourceImageUrl: string)
   });
 }
 
-async function optimizeImageForFalUpload(buffer: Buffer): Promise<Buffer> {
+function getFalImageDimensionSteps(maxDimension?: number): number[] {
+  if (typeof maxDimension !== 'number') {
+    return FAL_IMAGE_MAX_DIMENSION_STEPS;
+  }
+
+  const filteredSteps = FAL_IMAGE_MAX_DIMENSION_STEPS.filter((step) => step <= maxDimension);
+  return filteredSteps.length > 0 && filteredSteps[0] === maxDimension
+    ? filteredSteps
+    : [maxDimension, ...filteredSteps];
+}
+
+async function optimizeImageForFalUpload(buffer: Buffer, maxDimension?: number): Promise<Buffer> {
   let smallestBuffer: Buffer | null = null;
 
-  for (const maxDimension of FAL_IMAGE_MAX_DIMENSION_STEPS) {
+  for (const candidateMaxDimension of getFalImageDimensionSteps(maxDimension)) {
     for (const quality of FAL_IMAGE_QUALITY_STEPS) {
       const candidate = await sharp(buffer, { failOn: 'none' })
         .rotate()
         .resize({
-          width: maxDimension,
-          height: maxDimension,
+          width: candidateMaxDimension,
+          height: candidateMaxDimension,
           fit: 'inside',
           withoutEnlargement: true,
         })
@@ -314,25 +346,129 @@ async function submitFalQueueRequest(
   return (await response.json()) as FalCreateJobResponse;
 }
 
+function trimSlashes(value: string): string {
+  return value.replace(/^\/+|\/+$/g, '');
+}
+
+function buildFalQueueResponseUrl(endpointPath: string, requestId: string): string {
+  return `${FAL_QUEUE_BASE_URL}/${trimSlashes(endpointPath)}/requests/${requestId}`;
+}
+
+function encodeFalStatusHandle(statusUrl: string, requestId: string): string {
+  return `${FAL_STATUS_HANDLE_PREFIX}${Buffer.from(statusUrl, 'utf8').toString('base64url')}::${requestId}`;
+}
+
+function decodeFalStatusHandle(
+  externalJobId: string,
+): { statusUrl: string; requestId: string } | null {
+  if (!externalJobId.startsWith(FAL_STATUS_HANDLE_PREFIX)) {
+    return null;
+  }
+
+  const separatorIndex = externalJobId.lastIndexOf('::');
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  const encodedStatusUrl = externalJobId.slice(FAL_STATUS_HANDLE_PREFIX.length, separatorIndex);
+  const requestId = externalJobId.slice(separatorIndex + 2);
+  if (!encodedStatusUrl || !requestId) {
+    return null;
+  }
+
+  try {
+    return {
+      statusUrl: Buffer.from(encodedStatusUrl, 'base64url').toString('utf8'),
+      requestId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function resolveFalQueueUrls(
   endpointPath: string,
   externalJobId: string,
 ): {
+  endpointPath: string;
+  requestId?: string;
   responseUrl: string;
   statusUrl: string;
 } {
-  if (externalJobId.startsWith('http://') || externalJobId.startsWith('https://')) {
+  const encodedHandle = decodeFalStatusHandle(externalJobId);
+  if (encodedHandle) {
+    const responseUrl = encodedHandle.statusUrl.replace(/\/status(?:\?.*)?\/?$/, '');
     return {
-      responseUrl: externalJobId,
-      statusUrl: `${externalJobId}/status`,
+      endpointPath: resolvedEndpointPathFromUrl(responseUrl) ?? trimSlashes(endpointPath),
+      requestId: encodedHandle.requestId,
+      responseUrl,
+      statusUrl: encodedHandle.statusUrl,
     };
   }
 
-  const responseUrl = `${FAL_QUEUE_BASE_URL}/${endpointPath}/requests/${externalJobId}`;
+  let resolvedEndpointPath = trimSlashes(endpointPath);
+  let rawJobId = externalJobId;
+  const separatorIndex = externalJobId.indexOf('::');
+
+  if (separatorIndex !== -1) {
+    resolvedEndpointPath = trimSlashes(externalJobId.slice(0, separatorIndex)) || resolvedEndpointPath;
+    rawJobId = externalJobId.slice(separatorIndex + 2);
+  }
+
+  if (rawJobId.startsWith('http://') || rawJobId.startsWith('https://')) {
+    try {
+      const parsed = new URL(rawJobId);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const requestsIndex = segments.indexOf('requests');
+
+      if (requestsIndex > 0 && segments.length > requestsIndex + 1) {
+        const parsedEndpointPath = segments.slice(0, requestsIndex).join('/');
+        const requestId = segments[requestsIndex + 1];
+        const canonicalEndpointPath = trimSlashes(parsedEndpointPath) || resolvedEndpointPath;
+        const responseUrl = `${parsed.origin}/${canonicalEndpointPath}/requests/${requestId}`;
+
+        return {
+          endpointPath: canonicalEndpointPath,
+          requestId,
+          responseUrl,
+          statusUrl: `${responseUrl}/status`,
+        };
+      }
+    } catch {
+      // Fall through to direct URL handling below.
+    }
+
+    const responseUrl = rawJobId.replace(/\/status\/?$/, '');
+    return {
+      endpointPath: resolvedEndpointPath,
+      responseUrl,
+      statusUrl: rawJobId.endsWith('/status') ? rawJobId : `${responseUrl}/status`,
+    };
+  }
+
+  const requestId = rawJobId;
+  const responseUrl = buildFalQueueResponseUrl(resolvedEndpointPath, requestId);
   return {
+    endpointPath: resolvedEndpointPath,
+    requestId,
     responseUrl,
     statusUrl: `${responseUrl}/status`,
   };
+}
+
+function resolvedEndpointPathFromUrl(urlString: string): string | null {
+  try {
+    const parsed = new URL(urlString);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const requestsIndex = segments.indexOf('requests');
+    if (requestsIndex <= 0) {
+      return null;
+    }
+
+    return trimSlashes(segments.slice(0, requestsIndex).join('/')) || null;
+  } catch {
+    return null;
+  }
 }
 
 async function getFalQueueStatus(
@@ -415,13 +551,51 @@ function formatFalLogs(status: FalQueueStatusResponse): string | undefined {
   return messages.slice(-3).join(' | ');
 }
 
+const FAL_MULTI_IMAGE_JOB_PREFIX = 'multi:';
+const FAL_MULTI_IMAGE_JOB_SEPARATOR = '|';
+
+function encodeFalMultiImageJobId(jobIds: string[]): string {
+  return `${FAL_MULTI_IMAGE_JOB_PREFIX}${jobIds.join(FAL_MULTI_IMAGE_JOB_SEPARATOR)}`;
+}
+
+function decodeFalMultiImageJobId(externalJobId: string): string[] | null {
+  if (!externalJobId.startsWith(FAL_MULTI_IMAGE_JOB_PREFIX)) {
+    return null;
+  }
+
+  const encodedPayload = externalJobId.slice(FAL_MULTI_IMAGE_JOB_PREFIX.length);
+  if (!encodedPayload) {
+    return null;
+  }
+
+  if (encodedPayload.includes(FAL_MULTI_IMAGE_JOB_SEPARATOR)) {
+    const parsed = encodedPayload
+      .split(FAL_MULTI_IMAGE_JOB_SEPARATOR)
+      .map((jobId) => jobId.trim())
+      .filter((jobId) => jobId.length > 0);
+
+    return parsed.length > 0 ? parsed : null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (Array.isArray(parsed) && parsed.every((jobId) => typeof jobId === 'string' && jobId.length > 0)) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 // ─── Fal.ai Implementation ──────────────────────────
 export class FalImageAdapter implements ImageGenerationAdapter {
   readonly providerName = 'fal';
   private apiKey: string;
   private textSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/text-to-image';
   private editSubmitEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
-  private static multiJobRequests = new Map<string, string[]>();
+  private queueEndpointPath = 'fal-ai/bytedance';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -443,14 +617,10 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       return requests[0];
     }
 
-    const aggregateJobId = `multi:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    FalImageAdapter.multiJobRequests.set(
-      aggregateJobId,
-      requests.map((request) => request.externalJobId),
-    );
-
     return {
-      externalJobId: aggregateJobId,
+      externalJobId: encodeFalMultiImageJobId(
+        requests.map((request) => request.externalJobId),
+      ),
       status: requests.some((request) => request.status === 'running') ? 'running' : 'queued',
     };
   }
@@ -460,7 +630,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string }>;
     errorMessage?: string;
   }> {
-    const multiJobRequests = FalImageAdapter.multiJobRequests.get(externalJobId);
+    const multiJobRequests = decodeFalMultiImageJobId(externalJobId);
     if (multiJobRequests) {
       const results = await Promise.all(
         multiJobRequests.map((requestId) => this.getSingleJobResult(requestId)),
@@ -508,10 +678,13 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     }
 
     return {
-      externalJobId: this.encodeExternalJobId(
-        endpointPath,
-        data.response_url ?? data.request_id ?? `fal-${Date.now()}-${index}`,
-      ),
+      externalJobId:
+        data.status_url && data.request_id
+          ? encodeFalStatusHandle(data.status_url, data.request_id)
+          : this.encodeExternalJobId(
+              endpointPath,
+              data.request_id ?? data.response_url ?? `fal-${Date.now()}-${index}`,
+            ),
       status,
     };
   }
@@ -522,8 +695,7 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     errorMessage?: string;
   }> {
     try {
-      const { endpointPath, jobId } = this.decodeExternalJobId(externalJobId);
-      const status = await getFalQueueStatus(this.apiKey, endpointPath, jobId);
+      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -539,8 +711,8 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       );
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
-        endpointPath,
-        jobId,
+        this.queueEndpointPath,
+        externalJobId,
         status.response_url,
       );
       const responseBody =
@@ -596,6 +768,10 @@ export class FalImageAdapter implements ImageGenerationAdapter {
       payload.image_urls = input.referenceImages?.slice(0, 9) || [];
     }
 
+    if (input.webhookUrl) {
+      payload.webhook_url = input.webhookUrl;
+    }
+
     return payload;
   }
 
@@ -605,28 +781,6 @@ export class FalImageAdapter implements ImageGenerationAdapter {
     }
 
     return `${endpointPath}::${jobId}`;
-  }
-
-  private decodeExternalJobId(externalJobId: string): { endpointPath: string; jobId: string } {
-    if (externalJobId.startsWith('http://') || externalJobId.startsWith('https://')) {
-      return {
-        endpointPath: this.textSubmitEndpointPath,
-        jobId: externalJobId,
-      };
-    }
-
-    const separatorIndex = externalJobId.indexOf('::');
-    if (separatorIndex === -1) {
-      return {
-        endpointPath: this.textSubmitEndpointPath,
-        jobId: externalJobId,
-      };
-    }
-
-    return {
-      endpointPath: externalJobId.slice(0, separatorIndex),
-      jobId: externalJobId.slice(separatorIndex + 2),
-    };
   }
 
   private mapAspectRatio(ratio?: string): string {
@@ -701,6 +855,12 @@ export class ReplicateImageAdapter implements ImageGenerationAdapter {
           num_inference_steps: input.steps ?? 4,
           disable_safety_checker: true,
         },
+        ...(input.webhookUrl
+          ? {
+              webhook: input.webhookUrl,
+              webhook_events_filter: ['completed'],
+            }
+          : {}),
       }),
     });
 
@@ -764,10 +924,12 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
   private apiKey: string;
   private baseUrl =
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent';
-  private static completedJobs = new Map<
+  private requestTimeoutMs = Number(process.env.GOOGLE_IMAGE_REQUEST_TIMEOUT_MS || 45000);
+  private requestRetryLimit = Number(process.env.GOOGLE_IMAGE_RETRY_LIMIT || 3);
+  private static jobs = new Map<
     string,
     {
-      status: 'completed' | 'failed';
+      status: 'running' | 'completed' | 'failed';
       outputs?: Array<{ url: string; mimeType: string }>;
       errorMessage?: string;
     }
@@ -786,26 +948,34 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     }
 
     const requestCount = Math.max(1, Math.min(input.numImages ?? 1, 4));
-    const outputs = (
-      await Promise.all(
-        Array.from({ length: requestCount }, async () => this.generateImages(input)),
-      )
-    ).flat();
-
-    if (!outputs.length) {
-      throw new Error('Google Gemini returned no image outputs');
-    }
-
     const externalJobId = `google-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    GoogleImageAdapter.completedJobs.set(externalJobId, {
-      status: 'completed',
-      outputs,
+    GoogleImageAdapter.jobs.set(externalJobId, {
+      status: 'running',
     });
 
-    return {
-      externalJobId,
-      status: 'completed',
-    };
+    try {
+      const resultSets = await this.generateAllImages(input, requestCount);
+      const outputs = resultSets.flat();
+      if (!outputs.length) {
+        throw new Error('Google Gemini returned no image outputs');
+      }
+
+      GoogleImageAdapter.jobs.set(externalJobId, {
+        status: 'completed',
+        outputs,
+      });
+
+      return {
+        externalJobId,
+        status: 'completed',
+      };
+    } catch (error) {
+      GoogleImageAdapter.jobs.set(externalJobId, {
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'Google image generation failed',
+      });
+      throw error;
+    }
   }
 
   async getJob(externalJobId: string): Promise<{
@@ -813,15 +983,52 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string }>;
     errorMessage?: string;
   }> {
-    const completedJob = GoogleImageAdapter.completedJobs.get(externalJobId);
-    if (!completedJob) {
+    const job = GoogleImageAdapter.jobs.get(externalJobId);
+    if (!job) {
       return {
         status: 'failed',
         errorMessage: 'Google image job result is unavailable',
       };
     }
 
-    return completedJob;
+    return job;
+  }
+
+  private async generateAllImages(
+    input: ImageGenerationInput,
+    requestCount: number,
+  ): Promise<Array<Array<{ url: string; mimeType: string }>>> {
+    const outputs: Array<Array<{ url: string; mimeType: string }>> = [];
+
+    // Run sequentially so one "4 image" job does not burst 4 parallel Google requests.
+    for (let index = 0; index < requestCount; index += 1) {
+      outputs.push(await this.generateImagesWithRetry(input, index));
+    }
+
+    return outputs;
+  }
+
+  private async generateImagesWithRetry(
+    input: ImageGenerationInput,
+    requestIndex: number,
+  ): Promise<Array<{ url: string; mimeType: string }>> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.requestRetryLimit; attempt += 1) {
+      try {
+        return await this.generateImages(input);
+      } catch (error) {
+        lastError = this.normalizeGoogleError(error, requestIndex, attempt);
+        if (attempt >= this.requestRetryLimit || !this.isRetryableGoogleError(lastError)) {
+          throw lastError;
+        }
+
+        const backoffMs = Math.min(1000 * attempt, 3000);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw lastError ?? new Error('Google image generation failed');
   }
 
   private async generateImages(
@@ -830,6 +1037,7 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     const parts = await this.buildParts(input);
     const response = await fetch(this.baseUrl, {
       method: 'POST',
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
       headers: {
         'x-goog-api-key': this.apiKey,
         'Content-Type': 'application/json',
@@ -867,6 +1075,43 @@ export class GoogleImageAdapter implements ImageGenerationAdapter {
     }
 
     return outputs;
+  }
+
+  private normalizeGoogleError(error: unknown, requestIndex: number, attempt: number): Error {
+    if (error instanceof Error) {
+      const causeMessage =
+        error.cause instanceof Error
+          ? error.cause.message
+          : typeof error.cause === 'string'
+            ? error.cause
+            : '';
+      const detail = causeMessage && !error.message.includes(causeMessage) ? `: ${causeMessage}` : '';
+      return new Error(
+        `Google image request ${requestIndex + 1} failed on attempt ${attempt}: ${error.message}${detail}`,
+      );
+    }
+
+    return new Error(
+      `Google image request ${requestIndex + 1} failed on attempt ${attempt}: ${String(error)}`,
+    );
+  }
+
+  private isRetryableGoogleError(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('fetch failed') ||
+      message.includes('timeout') ||
+      message.includes('timed out') ||
+      message.includes('high demand') ||
+      message.includes('temporarily unavailable') ||
+      message.includes('429') ||
+      message.includes('500') ||
+      message.includes('502') ||
+      message.includes('503') ||
+      message.includes('504') ||
+      message.includes('econnreset') ||
+      message.includes('socket hang up')
+    );
   }
 
   private buildSystemInstruction(input: ImageGenerationInput): string {
@@ -1046,7 +1291,8 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
   private apiKey: string;
   private textToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/text-to-video';
   private imageToVideoSubmitEndpointPath = 'fal-ai/kling-video/v3/standard/image-to-video';
-  private queueEndpointPath = 'fal-ai/kling-video/v3/standard';
+  private motionControlSubmitEndpointPath = 'fal-ai/kling-video/v3/pro/motion-control';
+  private queueEndpointPath = 'fal-ai/kling-video';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -1056,32 +1302,71 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     externalJobId: string;
     status: 'queued' | 'running' | 'completed';
   }> {
+    const workflow =
+      input.settings?.workflow === 'motion-control' ? 'motion-control' : 'standard';
     const sourceImageUrl = input.sourceImageUrl
-      ? await normalizeFalInputImageUrl(this.apiKey, input.sourceImageUrl)
+      ? await normalizeFalInputImageUrl(this.apiKey, input.sourceImageUrl, {
+          maxDimension: FAL_VIDEO_MAX_INPUT_DIMENSION,
+        })
       : undefined;
-    const endpointPath = sourceImageUrl
-      ? this.imageToVideoSubmitEndpointPath
-      : this.textToVideoSubmitEndpointPath;
+    const referenceVideoUrl =
+      workflow === 'motion-control' && typeof input.referenceVideoUrl === 'string'
+        ? input.referenceVideoUrl
+        : undefined;
+    const endpointPath =
+      workflow === 'motion-control'
+        ? this.motionControlSubmitEndpointPath
+        : sourceImageUrl
+          ? this.imageToVideoSubmitEndpointPath
+          : this.textToVideoSubmitEndpointPath;
     const motionAmount =
       typeof input.settings?.motionAmount === 'number' ? input.settings.motionAmount : undefined;
+    const builtPrompt = this.buildPrompt(
+      input.prompt,
+      typeof input.settings?.cameraControl === 'string'
+        ? input.settings.cameraControl
+        : undefined,
+      Boolean(sourceImageUrl),
+    );
 
-    const data = await submitFalQueueRequest(this.apiKey, endpointPath, {
-      prompt: this.buildPrompt(
-        input.prompt,
-        typeof input.settings?.cameraControl === 'string'
-          ? input.settings.cameraControl
-          : undefined,
-      ),
-      ...(sourceImageUrl ? { start_image_url: sourceImageUrl } : {}),
-      duration: `${input.durationSec ?? 5}`,
-      aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
-      generate_audio: false,
-      ...(motionAmount != null
+    if (workflow === 'motion-control') {
+      if (!sourceImageUrl) {
+        throw new Error('Fal motion control requires a source image');
+      }
+
+      if (!referenceVideoUrl) {
+        throw new Error('Fal motion control requires a reference video');
+      }
+    }
+
+    const data = await submitFalQueueRequest(
+      this.apiKey,
+      endpointPath,
+      workflow === 'motion-control'
         ? {
-          cfg_scale: Math.max(0, Math.min(1, motionAmount / 10)),
-        }
-        : {}),
-    });
+            ...(builtPrompt ? { prompt: builtPrompt } : {}),
+            image_url: sourceImageUrl,
+            video_url: referenceVideoUrl,
+            keep_original_sound: input.settings?.keepOriginalSound !== false,
+            character_orientation: this.normalizeCharacterOrientation(
+              input.settings?.characterOrientation,
+            ),
+            ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
+          }
+        : {
+            ...(builtPrompt ? { prompt: builtPrompt } : {}),
+            ...(sourceImageUrl ? { start_image_url: sourceImageUrl } : {}),
+            duration: `${input.durationSec ?? 5}`,
+            aspect_ratio: this.normalizeAspectRatio(input.aspectRatio),
+            generate_audio: false,
+            ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
+            ...(motionAmount != null
+              ? {
+                  cfg_scale: Math.max(0, Math.min(1, motionAmount / 10)),
+                }
+              : {}),
+          },
+    );
     const status = mapFalStatus(data.status);
 
     if (status === 'failed') {
@@ -1089,7 +1374,12 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     }
 
     return {
-      externalJobId: data.response_url ?? data.request_id ?? `fal-video-${Date.now()}`,
+      externalJobId:
+        data.status_url && data.request_id
+          ? encodeFalStatusHandle(data.status_url, data.request_id)
+          : data.request_id
+            ? this.encodeExternalJobId(endpointPath, data.request_id)
+            : data.response_url ?? `fal-video-${Date.now()}`,
       status,
     };
   }
@@ -1099,55 +1389,64 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     outputs?: Array<{ url: string; mimeType: string; durationSec?: number }>;
     errorMessage?: string;
   }> {
-    try {
-      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
-      const mappedStatus = mapFalStatus(status.status);
-      const logSummary = formatFalLogs(status);
+    let lastError: unknown;
 
-      if (mappedStatus !== 'completed') {
+    for (const candidateJobId of this.getExternalJobIdCandidates(externalJobId)) {
+      try {
+        const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, candidateJobId);
+        const mappedStatus = mapFalStatus(status.status);
+        const logSummary = formatFalLogs(status);
+
+        if (mappedStatus !== 'completed') {
+          return {
+            status: mappedStatus,
+            errorMessage: status.error || logSummary,
+          };
+        }
+
+        const inlineResponse = extractFalResponse<FalVideoResponse>(
+          status as unknown as Record<string, unknown>,
+        );
+        const result = await getFalQueueResult<FalVideoResponse>(
+          this.apiKey,
+          this.queueEndpointPath,
+          candidateJobId,
+          status.response_url,
+        );
+        const responseBody =
+          inlineResponse ??
+          extractFalResponse<FalVideoResponse>(result as unknown as Record<string, unknown>);
+        const video = responseBody?.video;
+
+        if (!video?.url) {
+          return {
+            status: 'failed',
+            errorMessage:
+              result.error || status.error || logSummary || 'Fal video job returned no output video',
+          };
+        }
+
         return {
-          status: mappedStatus,
-          errorMessage: status.error || logSummary,
+          status: 'completed',
+          outputs: [
+            {
+              url: video.url,
+              mimeType: video.content_type || 'video/mp4',
+            },
+          ],
         };
+      } catch (error) {
+        lastError = error;
+        if (!this.shouldRetryWithAlternateEndpoint(error)) {
+          break;
+        }
       }
-
-      const inlineResponse = extractFalResponse<FalVideoResponse>(
-        status as unknown as Record<string, unknown>,
-      );
-      const result = await getFalQueueResult<FalVideoResponse>(
-        this.apiKey,
-        this.queueEndpointPath,
-        externalJobId,
-        status.response_url,
-      );
-      const responseBody =
-        inlineResponse ??
-        extractFalResponse<FalVideoResponse>(result as unknown as Record<string, unknown>);
-      const video = responseBody?.video;
-
-      if (!video?.url) {
-        return {
-          status: 'failed',
-          errorMessage:
-            result.error || status.error || logSummary || 'Fal video job returned no output video',
-        };
-      }
-
-      return {
-        status: 'completed',
-        outputs: [
-          {
-            url: video.url,
-            mimeType: video.content_type || 'video/mp4',
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : 'Failed to fetch Fal video job',
-      };
     }
+
+    return {
+      status: 'failed',
+      errorMessage: lastError instanceof Error ? lastError.message : 'Failed to fetch Fal video job',
+    };
   }
 
   private normalizeAspectRatio(ratio?: string): string {
@@ -1155,9 +1454,12 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
     return ratio && allowedRatios.has(ratio) ? ratio : '16:9';
   }
 
-  private buildPrompt(prompt: string, cameraControl?: string): string {
+  private buildPrompt(prompt: string, cameraControl?: string, hasSourceImage = false): string {
+    const trimmedPrompt = prompt.trim();
+    const basePrompt = trimmedPrompt || (hasSourceImage ? 'Preserve the source image and animate it naturally.' : '');
+
     if (!cameraControl || cameraControl === 'none') {
-      return prompt;
+      return basePrompt;
     }
 
     const cameraPrompts: Record<string, string> = {
@@ -1171,10 +1473,53 @@ export class FalVideoAdapter implements VideoGenerationAdapter {
 
     const cameraPrompt = cameraPrompts[cameraControl];
     if (!cameraPrompt) {
-      return prompt;
+      return basePrompt;
     }
 
-    return `${prompt}\n\n${cameraPrompt}`;
+    return [basePrompt, cameraPrompt].filter(Boolean).join('\n\n');
+  }
+
+  private normalizeCharacterOrientation(value: unknown): 'image' | 'video' {
+    return value === 'video' ? 'video' : 'image';
+  }
+
+  private encodeExternalJobId(endpointPath: string, jobId: string): string {
+    if (jobId.startsWith('http://') || jobId.startsWith('https://')) {
+      return jobId;
+    }
+
+    return `${endpointPath}::${jobId}`;
+  }
+
+  private getExternalJobIdCandidates(externalJobId: string): string[] {
+    const statusHandle = decodeFalStatusHandle(externalJobId);
+    if (statusHandle) {
+      return [externalJobId, statusHandle.requestId];
+    }
+
+    if (
+      externalJobId.includes('::')
+      || externalJobId.startsWith('http://')
+      || externalJobId.startsWith('https://')
+    ) {
+      const separatorIndex = externalJobId.indexOf('::');
+      if (separatorIndex !== -1) {
+        const requestId = externalJobId.slice(separatorIndex + 2);
+        return [externalJobId, requestId];
+      }
+
+      return [externalJobId];
+    }
+
+    return [
+      this.encodeExternalJobId(this.imageToVideoSubmitEndpointPath, externalJobId),
+      this.encodeExternalJobId(this.textToVideoSubmitEndpointPath, externalJobId),
+      externalJobId,
+    ];
+  }
+
+  private shouldRetryWithAlternateEndpoint(error: unknown): boolean {
+    return error instanceof Error && /Fal status error: (404|405)\b/.test(error.message);
   }
 }
 
@@ -1364,6 +1709,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
   readonly providerName = 'fal';
   private apiKey: string;
   private editEndpointPath = 'fal-ai/bytedance/seedream/v4.5/edit';
+  private queueEndpointPath = 'fal-ai/bytedance';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -1393,6 +1739,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       safety_tolerance: 2,
       enable_safety_checker: true,
       output_format: 'jpeg',
+      ...(input.webhookUrl ? { webhook_url: input.webhookUrl } : {}),
     });
 
     const status = mapFalStatus(data.status);
@@ -1400,10 +1747,18 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       throw new Error('Fal face swap job failed to start');
     }
 
-    const externalJobId = data.response_url ?? data.request_id ?? `fal-faceswap-${Date.now()}`;
+    const externalJobId = this.encodeExternalJobId(
+      this.editEndpointPath,
+      data.request_id ?? data.response_url ?? `fal-faceswap-${Date.now()}`,
+    );
+
+    const resolvedExternalJobId =
+      data.status_url && data.request_id
+        ? encodeFalStatusHandle(data.status_url, data.request_id)
+        : externalJobId;
 
     return {
-      externalJobId,
+      externalJobId: resolvedExternalJobId,
       status,
     };
   }
@@ -1414,7 +1769,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
     errorMessage?: string;
   }> {
     try {
-      const status = await getFalQueueStatus(this.apiKey, this.editEndpointPath, externalJobId);
+      const status = await getFalQueueStatus(this.apiKey, this.queueEndpointPath, externalJobId);
       const mappedStatus = mapFalStatus(status.status);
       const logSummary = formatFalLogs(status);
 
@@ -1430,7 +1785,7 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
       );
       const result = await getFalQueueResult<FalImageResponse>(
         this.apiKey,
-        this.editEndpointPath,
+        this.queueEndpointPath,
         externalJobId,
         status.response_url,
       );
@@ -1461,6 +1816,14 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
         errorMessage: error instanceof Error ? error.message : 'Failed to fetch Fal face swap job',
       };
     }
+  }
+
+  private encodeExternalJobId(endpointPath: string, jobId: string): string {
+    if (jobId.startsWith('http://') || jobId.startsWith('https://')) {
+      return jobId;
+    }
+
+    return `${endpointPath}::${jobId}`;
   }
 }
 

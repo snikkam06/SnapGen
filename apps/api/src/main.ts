@@ -1,9 +1,10 @@
-import dotenv from 'dotenv';
-import path from 'node:path';
 import net from 'node:net';
+import { hasRemoteStorageConfig, isProductionRuntime } from '@snapgen/config';
+import { loadApiEnv } from './env/load-env';
+import { captureApiException, flushApiSentry, initApiSentry } from './observability/sentry';
 
-// Load .env from the monorepo root
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+loadApiEnv();
+initApiSentry();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -34,18 +35,40 @@ async function isRedisReachable(redisUrl?: string): Promise<boolean> {
 
 async function bootstrap() {
     if (!(await isRedisReachable(process.env.REDIS_URL))) {
+        if (isProductionRuntime()) {
+            console.error(
+                'FATAL: Redis is unavailable. Production API cannot fall back to inline processing.',
+            );
+            process.exit(1);
+        }
+
         process.env.SNAPGEN_DISABLE_QUEUE = 'true';
+        process.env.SNAPGEN_INLINE_PROCESSING = 'true';
         console.warn('Redis is unavailable. Running API with inline media processing.');
     }
 
+    if (isProductionRuntime() && !hasRemoteStorageConfig(process.env)) {
+        console.error(
+            'FATAL: Cloudflare R2 object storage must be configured in production.',
+        );
+        process.exit(1);
+    }
+
     const { AppModule } = await import('./app.module');
-    const app = await NestFactory.create(AppModule, { rawBody: true });
+    const app = await NestFactory.create(AppModule, {
+      bodyParser: false,
+    });
 
     // Security headers
     app.use(helmet());
 
-    // Increase body size limit for file uploads
-    app.use(json({ limit: '50mb' }));
+    // Body parser that preserves raw body for Stripe webhook signature verification
+    app.use(json({
+      limit: '50mb',
+      verify: (_req: any, _res: any, buf: Buffer) => {
+        (_req as any).rawBody = buf;
+      },
+    }));
 
     // Global prefix
     app.setGlobalPrefix('api');
@@ -95,7 +118,14 @@ async function bootstrap() {
     const port = process.env.PORT || 3001;
     await app.listen(port);
     console.log(`🚀 SnapGen API running on http://localhost:${port}/api`);
-    console.log(`📚 Swagger docs at http://localhost:${port}/api/docs`);
+    if (process.env.NODE_ENV !== 'production') {
+        console.log(`📚 Swagger docs at http://localhost:${port}/api/docs`);
+    }
 }
 
-bootstrap();
+bootstrap().catch(async (error) => {
+    captureApiException(error, { phase: 'bootstrap' });
+    console.error('FATAL: Failed to start API', error);
+    await flushApiSentry();
+    process.exit(1);
+});

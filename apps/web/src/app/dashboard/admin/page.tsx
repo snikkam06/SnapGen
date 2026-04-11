@@ -59,7 +59,7 @@ export default function AdminPage() {
     const [creditUserId, setCreditUserId] = useState<string | null>(null);
     const tokenQuery = useApiToken();
     const queryClient = useQueryClient();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const tabs = [
         { id: 'users' as AdminTab, name: 'Users', icon: Users },
@@ -70,22 +70,22 @@ export default function AdminPage() {
 
     // Users search
     const usersQuery = useQuery({
-        queryKey: ['admin-users', token, searchQuery],
-        enabled: !!token && activeTab === 'users' && searchQuery.length >= 2,
-        queryFn: () => api.adminSearchUsers(token as string, searchQuery) as Promise<AdminUser[]>,
+        queryKey: ['admin-users', userId, searchQuery],
+        enabled: isReady && activeTab === 'users' && searchQuery.length >= 2,
+        queryFn: () => api.adminSearchUsers(getToken, searchQuery) as Promise<AdminUser[]>,
     });
 
     // Failed jobs
     const failedJobsQuery = useQuery({
-        queryKey: ['admin-failed-jobs', token],
-        enabled: !!token && activeTab === 'jobs',
-        queryFn: () => api.adminGetFailedJobs(token as string) as Promise<FailedJob[]>,
+        queryKey: ['admin-failed-jobs', userId],
+        enabled: isReady && activeTab === 'jobs',
+        queryFn: () => api.adminGetFailedJobs(getToken) as Promise<FailedJob[]>,
     });
 
     const retryJobMutation = useMutation({
         mutationFn: async (jobId: string) => {
-            if (!token) throw new Error('No token');
-            return api.adminRetryJob(token, jobId);
+            if (!isReady) throw new Error('No token');
+            return api.adminRetryJob(getToken, jobId);
         },
         onSuccess: async () => {
             toast.success('Job retry queued');
@@ -98,15 +98,15 @@ export default function AdminPage() {
 
     // Credit user lookup
     const creditUserQuery = useQuery({
-        queryKey: ['admin-credit-user', token, creditEmail],
-        enabled: !!token && activeTab === 'credits' && creditEmail.length >= 3,
-        queryFn: () => api.adminSearchUsers(token as string, creditEmail) as Promise<AdminUser[]>,
+        queryKey: ['admin-credit-user', userId, creditEmail],
+        enabled: isReady && activeTab === 'credits' && creditEmail.length >= 3,
+        queryFn: () => api.adminSearchUsers(getToken, creditEmail) as Promise<AdminUser[]>,
     });
 
     const adjustCreditsMutation = useMutation({
         mutationFn: async ({ amount }: { amount: number }) => {
-            if (!token || !creditUserId) throw new Error('Missing token or user');
-            return api.adminAdjustCredits(token, {
+            if (!isReady || !creditUserId) throw new Error('Missing token or user');
+            return api.adminAdjustCredits(getToken, {
                 userId: creditUserId,
                 amount,
                 reason: creditReason || 'Manual adjustment',
@@ -125,15 +125,15 @@ export default function AdminPage() {
 
     // Moderation
     const moderationQuery = useQuery({
-        queryKey: ['admin-moderation', token],
-        enabled: !!token && activeTab === 'moderation',
-        queryFn: () => api.adminGetModerationQueue(token as string) as Promise<ModerationItem[]>,
+        queryKey: ['admin-moderation', userId],
+        enabled: isReady && activeTab === 'moderation',
+        queryFn: () => api.adminGetModerationQueue(getToken) as Promise<ModerationItem[]>,
     });
 
     const moderateMutation = useMutation({
         mutationFn: async ({ assetId, status }: { assetId: string; status: string }) => {
-            if (!token) throw new Error('No token');
-            return api.adminModerateAsset(token, assetId, status);
+            if (!isReady) throw new Error('No token');
+            return api.adminModerateAsset(getToken, assetId, status);
         },
         onSuccess: async () => {
             toast.success('Asset moderated');

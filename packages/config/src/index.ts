@@ -8,12 +8,12 @@ export const APP_DESCRIPTION = 'Create stunning AI-generated images with custom 
 
 // ─── Credit costs per job type ───────────────────────
 export const CREDIT_COSTS = {
-    image: 5,
-    video: 25,
-    'faceswap-image': 10,
-    'faceswap-video': 30,
+    image: 20,            // regular generation
+    'faceswap-image': 30, // enhanced generation
+    video: 25,            // video 5 sec
+    'faceswap-video': 50, // video 10 sec
 
-    training: 100,
+    training: 25,
 } as const;
 
 // ─── Rate limits ─────────────────────────────────────
@@ -58,9 +58,14 @@ export const STORAGE_BUCKETS = {
 // ─── Subscription plan codes ─────────────────────────
 export const PLAN_CODES = {
     FREE: 'free',
+    BASIC: 'basic-monthly',
     CREATOR: 'creator-monthly',
     PRO: 'pro-monthly',
     BUSINESS: 'business-monthly',
+    BASIC_YEARLY: 'basic-yearly',
+    CREATOR_YEARLY: 'creator-yearly',
+    PRO_YEARLY: 'pro-yearly',
+    BUSINESS_YEARLY: 'business-yearly',
 } as const;
 
 // ─── Job status transitions ─────────────────────────
@@ -80,6 +85,110 @@ export interface RedisConnectionConfig {
     password?: string;
     tls?: Record<string, never>;
     maxRetriesPerRequest: null;
+}
+
+export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.NODE_ENV === 'production';
+}
+
+export function hasRemoteStorageConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+    return Boolean(
+        env.R2_ACCOUNT_ID
+        && env.R2_ACCESS_KEY_ID
+        && env.R2_SECRET_ACCESS_KEY
+        && env.STORAGE_MODE !== 'local',
+    );
+}
+
+type SupabaseUrlExpectation = 'runtime' | 'direct';
+
+function isSupabasePoolerHost(hostname: string): boolean {
+    return hostname.endsWith('.pooler.supabase.com');
+}
+
+function isSupabaseDirectHost(hostname: string): boolean {
+    return hostname.startsWith('db.') && hostname.endsWith('.supabase.co');
+}
+
+function validateSupabaseUrl(
+    envVar: 'DATABASE_URL' | 'DIRECT_URL' | 'DATABASE_READ_URL',
+    rawValue: string | undefined,
+    expectation: SupabaseUrlExpectation,
+): string[] {
+    if (!rawValue?.trim()) {
+        return [];
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(rawValue);
+    } catch {
+        return [];
+    }
+
+    const errors: string[] = [];
+    const host = parsed.hostname;
+    const port = parsed.port;
+
+    if (expectation === 'runtime') {
+        if (isSupabaseDirectHost(host)) {
+            errors.push(
+                `${envVar} points to the direct Supabase host (${host}). Use the transaction pooler host on port 6543 for runtime queries.`,
+            );
+        }
+
+        if (isSupabasePoolerHost(host) && port !== '6543') {
+            errors.push(
+                `${envVar} points to the Supabase pooler on port ${port || '(default)'}. Use port 6543 for transaction mode runtime queries.`,
+            );
+        }
+
+        if (
+            isSupabasePoolerHost(host)
+            && port === '6543'
+            && parsed.searchParams.get('pgbouncer') !== 'true'
+        ) {
+            errors.push(
+                `${envVar} is missing pgbouncer=true. Supabase transaction mode requires pgbouncer=true so Prisma does not use prepared statements.`,
+            );
+        }
+    }
+
+    if (expectation === 'direct') {
+        if (isSupabasePoolerHost(host) && port && port !== '5432') {
+            errors.push(
+                `${envVar} points to the Supabase pooler on port ${port}. Use the session pooler on port 5432 for IPv4 migrations, or the direct database host on port 5432 when IPv6 direct access is available.`,
+            );
+        }
+
+        if (isSupabaseDirectHost(host) && port && port !== '5432') {
+            errors.push(
+                `${envVar} points to the Supabase direct host on port ${port}. Use port 5432 for direct migration access.`,
+            );
+        }
+    }
+
+    return errors;
+}
+
+export function assertValidSupabaseDatabaseConfig(options: {
+    databaseUrl?: string;
+    directUrl?: string;
+    readUrl?: string;
+    context?: string;
+}): void {
+    const errors = [
+        ...validateSupabaseUrl('DATABASE_URL', options.databaseUrl, 'runtime'),
+        ...validateSupabaseUrl('DIRECT_URL', options.directUrl, 'direct'),
+        ...validateSupabaseUrl('DATABASE_READ_URL', options.readUrl, 'runtime'),
+    ];
+
+    if (errors.length === 0) {
+        return;
+    }
+
+    const prefix = options.context ? `[${options.context}] ` : '';
+    throw new Error(`${prefix}${errors.join(' ')}`);
 }
 
 export function getRedisConnectionConfig(

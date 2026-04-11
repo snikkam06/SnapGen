@@ -9,7 +9,6 @@ import {
     Search,
     Upload,
     Sparkles,
-    Cpu,
     Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -35,21 +34,21 @@ export default function CharactersPage() {
     const [characterType, setCharacterType] = useState('real');
     const tokenQuery = useApiToken();
     const queryClient = useQueryClient();
-    const token = tokenQuery.data;
+    const { getToken, isReady, userId } = tokenQuery;
 
     const charactersQuery = useQuery({
-        queryKey: ['characters', token],
-        enabled: !!token,
-        queryFn: () => api.getCharacters(token as string) as Promise<Character[]>,
+        queryKey: ['characters', userId],
+        enabled: isReady,
+        queryFn: () => api.getCharacters(getToken) as Promise<Character[]>,
     });
 
     const createCharacterMutation = useMutation({
         mutationFn: async () => {
-            if (!token) {
+            if (!isReady) {
                 throw new Error('Authentication token unavailable');
             }
 
-            return api.createCharacter(token, { name, characterType });
+            return api.createCharacter(getToken, { name, characterType });
         },
         onSuccess: async () => {
             setName('');
@@ -71,12 +70,12 @@ export default function CharactersPage() {
             characterId: string;
             files: File[];
         }) => {
-            if (!token) {
+            if (!isReady) {
                 throw new Error('Authentication token unavailable');
             }
 
             for (const file of files) {
-                await api.uploadCharacterImage(token, characterId, file);
+                await api.uploadCharacterImage(getToken, characterId, file);
             }
         },
         onSuccess: async () => {
@@ -88,26 +87,12 @@ export default function CharactersPage() {
         },
     });
 
-    const trainModelMutation = useMutation({
-        mutationFn: async (characterId: string) => {
-            if (!token) throw new Error('Authentication token unavailable');
-            return api.trainCharacter(token, characterId, { trainingPreset: 'default' });
-        },
-        onSuccess: async () => {
-            toast.success('Model training started');
-            await queryClient.invalidateQueries({ queryKey: ['characters'] });
-        },
-        onError: (error) => {
-            toast.error(error instanceof Error ? error.message : 'Failed to start training');
-        },
-    });
-
     const [deleteTarget, setDeleteTarget] = useState<Character | null>(null);
 
     const deleteCharacterMutation = useMutation({
         mutationFn: async (characterId: string) => {
-            if (!token) throw new Error('Authentication token unavailable');
-            return api.deleteCharacter(token, characterId);
+            if (!isReady) throw new Error('Authentication token unavailable');
+            return api.deleteCharacter(getToken, characterId);
         },
         onSuccess: async () => {
             setDeleteTarget(null);
@@ -199,13 +184,24 @@ export default function CharactersPage() {
                                 </div>
                             </div>
                             <div className="p-4">
-                                <h3 className="font-semibold truncate">{character.name}</h3>
-                                <p className="text-sm text-white/40 mt-1">
-                                    {character.imageCount} datasets • {character.characterType}
-                                </p>
-                                <div className="mt-4 flex gap-2">
-                                    <label className="btn-secondary flex-1 cursor-pointer text-center">
-                                        <Upload className="w-4 h-4 mr-2 inline-flex" />
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <h3 className="font-semibold truncate">{character.name}</h3>
+                                        <p className="text-sm text-white/40 mt-1">
+                                            {character.imageCount} datasets • {character.characterType}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setDeleteTarget(character)}
+                                        className="btn-secondary h-9 w-9 shrink-0 px-0 text-red-400 hover:text-red-300 hover:border-red-500/30"
+                                        title="Delete character"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    <label className="btn-secondary w-full cursor-pointer justify-center px-3 py-2.5 text-center">
+                                        <Upload className="w-4 h-4 mr-2 shrink-0" />
                                         Upload
                                         <input
                                             type="file"
@@ -225,30 +221,13 @@ export default function CharactersPage() {
                                             }}
                                         />
                                     </label>
-                                    {character.imageCount > 0 && (
-                                        <button
-                                            onClick={() => trainModelMutation.mutate(character.id)}
-                                            disabled={trainModelMutation.isPending}
-                                            className="btn-secondary flex-1 text-center"
-                                        >
-                                            <Cpu className="w-4 h-4 mr-2 inline-flex" />
-                                            Train
-                                        </button>
-                                    )}
                                     <Link
                                         href={`/dashboard/generate?characterId=${character.id}`}
-                                        className="btn-primary flex-1 text-center"
+                                        className="btn-primary w-full justify-center px-3 py-2.5 text-center"
                                     >
-                                        <Sparkles className="w-4 h-4 mr-2 inline-flex" />
+                                        <Sparkles className="w-4 h-4 mr-2 shrink-0" />
                                         Use
                                     </Link>
-                                    <button
-                                        onClick={() => setDeleteTarget(character)}
-                                        className="btn-secondary px-3 text-red-400 hover:text-red-300 hover:border-red-500/30"
-                                        title="Delete character"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
                                 </div>
                             </div>
                         </div>

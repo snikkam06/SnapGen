@@ -2,13 +2,23 @@ import { Injectable } from '@nestjs/common';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { getLegacyLocalStorageDirs, getLocalStorageDir } from '@snapgen/config';
+import {
+  STORAGE_BUCKETS,
+  getLegacyLocalStorageDirs,
+  getLocalStorageDir,
+  hasRemoteStorageConfig,
+  isProductionRuntime,
+} from '@snapgen/config';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+
+const LOCAL_FILE_URL_TTL_SEC = 60 * 60;
 
 @Injectable()
 export class StorageService {
@@ -26,20 +36,58 @@ export class StorageService {
           secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
         },
       });
+      return;
+    }
+
+    if (isProductionRuntime()) {
+      throw new Error('Cloudflare R2 object storage is required in production');
     }
   }
 
   private hasRemoteStorageConfig(): boolean {
-    return Boolean(
-      process.env.R2_ACCOUNT_ID &&
-      process.env.R2_ACCESS_KEY_ID &&
-      process.env.R2_SECRET_ACCESS_KEY &&
-      process.env.STORAGE_MODE !== 'local',
-    );
+    return hasRemoteStorageConfig(process.env);
   }
 
   isLocalMode(): boolean {
     return !this.s3;
+  }
+
+  async checkHealth(): Promise<{
+    healthy: boolean;
+    mode: 'local' | 'r2';
+    bucket: string | null;
+    detail: string;
+  }> {
+    if (this.isLocalMode()) {
+      return {
+        healthy: !isProductionRuntime(),
+        mode: 'local',
+        bucket: null,
+        detail: isProductionRuntime()
+          ? 'Local disk storage is active in production'
+          : 'Local disk storage is active for development',
+      };
+    }
+
+    const bucket =
+      process.env.R2_BUCKET_OUTPUTS || process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.outputs;
+
+    try {
+      await this.s3!.send(new HeadBucketCommand({ Bucket: bucket }));
+      return {
+        healthy: true,
+        mode: 'r2',
+        bucket,
+        detail: 'R2 bucket is reachable',
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        mode: 'r2',
+        bucket,
+        detail: error instanceof Error ? error.message : 'R2 health check failed',
+      };
+    }
   }
 
   async getSignedUploadUrl(bucket: string, key: string, contentType: string): Promise<string> {
@@ -57,7 +105,7 @@ export class StorageService {
 
   async getSignedDownloadUrl(bucket: string, key: string): Promise<string> {
     if (this.isLocalMode()) {
-      return this.getFileUrl(bucket, key);
+      return this.getSignedLocalFileUrl(bucket, key);
     }
     const command = new GetObjectCommand({
       Bucket: bucket,
@@ -66,9 +114,71 @@ export class StorageService {
     return getSignedUrl(this.s3!, command, { expiresIn: 3600 });
   }
 
-  getFileUrl(bucket: string, key: string): string {
+  getFileUrl(bucket: string, key: string, params?: Record<string, string | number>): string {
     const apiUrl = process.env.API_URL || 'http://localhost:3001';
-    return `${apiUrl}/api/v1/storage/files?bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(key)}`;
+    const searchParams = new URLSearchParams({
+      bucket,
+      key,
+    });
+    for (const [name, value] of Object.entries(params || {})) {
+      searchParams.set(name, String(value));
+    }
+    return `${apiUrl}/api/v1/storage/files?${searchParams.toString()}`;
+  }
+
+  private getLocalFileSigningSecret(): string {
+    return (
+      process.env.STORAGE_SIGNING_SECRET ||
+      process.env.CLERK_SECRET_KEY ||
+      process.env.R2_SECRET_ACCESS_KEY ||
+      ''
+    );
+  }
+
+  private signLocalFileRequest(bucket: string, key: string, expiresAtSec: number): string {
+    const secret = this.getLocalFileSigningSecret();
+    if (!secret) {
+      throw new Error('No storage signing secret configured for local file URLs');
+    }
+
+    return createHmac('sha256', secret)
+      .update(`${bucket}:${key}:${expiresAtSec}`)
+      .digest('hex');
+  }
+
+  private getSignedLocalFileUrl(bucket: string, key: string): string {
+    const expiresAtSec = Math.floor(Date.now() / 1000) + LOCAL_FILE_URL_TTL_SEC;
+    const sig = this.signLocalFileRequest(bucket, key, expiresAtSec);
+    return this.getFileUrl(bucket, key, { expires: expiresAtSec, sig });
+  }
+
+  verifyLocalFileSignature(
+    bucket: string,
+    key: string,
+    expires: string | undefined,
+    sig: string | undefined,
+  ): boolean {
+    if (!expires || !sig) {
+      return false;
+    }
+
+    const expiresAtSec = Number(expires);
+    if (!Number.isInteger(expiresAtSec) || expiresAtSec < Math.floor(Date.now() / 1000)) {
+      return false;
+    }
+
+    try {
+      const expectedSig = this.signLocalFileRequest(bucket, key, expiresAtSec);
+      const expectedBuffer = Buffer.from(expectedSig, 'hex');
+      const providedBuffer = Buffer.from(sig, 'hex');
+      if (expectedBuffer.length !== providedBuffer.length) {
+        return false;
+      }
+
+      return timingSafeEqual(expectedBuffer, providedBuffer);
+    } catch {
+      return false;
+    }
   }
 
   private validatePath(baseDir: string, bucket: string, key: string): string {
@@ -205,7 +315,7 @@ export class StorageService {
     }
 
     if (await this.getExistingLocalFilePath(asset.storageBucket, asset.storageKey)) {
-      return this.getFileUrl(asset.storageBucket, asset.storageKey);
+      return this.getSignedDownloadUrl(asset.storageBucket, asset.storageKey);
     }
 
     return this.getSignedDownloadUrl(asset.storageBucket, asset.storageKey);

@@ -3,8 +3,8 @@ import {
   Injectable,
   InternalServerErrorException,
   NotFoundException,
-  NotImplementedException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -14,10 +14,17 @@ import { createImageAdapter, createVideoAdapter, createFaceSwapAdapter } from '@
 import { PrismaService } from '../../prisma/prisma.service';
 import { CREDIT_COSTS } from '@snapgen/config';
 import { StorageService } from '../storage/storage.service';
+import { QueueHealthService } from './queue-health.service';
+import { JobEventsService, JobEvent } from '../events/job-events.service';
 import { assertNonEmptyString, assertOptionalUuid } from '../../utils/validation';
 
+const INLINE_PROCESSING_ENABLED = process.env.SNAPGEN_INLINE_PROCESSING === 'true';
+const MAX_PENDING_JOBS_PER_USER = Number(process.env.MAX_PENDING_JOBS_PER_USER) || 5;
 const QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS = 15_000;
 const QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS = 15_000;
+const RUNNING_IMAGE_JOB_RECONCILE_THRESHOLD_MS = 20_000;
+const RUNNING_VIDEO_JOB_RECONCILE_THRESHOLD_MS = 45_000;
+const RUNNING_FACESWAP_JOB_RECONCILE_THRESHOLD_MS = 20_000;
 
 const MINOR_BLOCKLIST_PATTERNS = [
   /\b(?:child|children|kid|kids|infant|toddler|baby)\b/i,
@@ -31,11 +38,16 @@ const MINOR_BLOCKLIST_PATTERNS = [
   /\b(?:adolescent)\b/i,
   /\b(?:prepubescent|pubescent)\b/i,
 ];
+const MOTION_CONTROL_CREDITS_PER_SECOND = {
+  withAudio: 38,
+  withoutAudio: 26,
+} as const;
 
 function containsMinorTerms(prompt: string): boolean {
   return MINOR_BLOCKLIST_PATTERNS.some((pattern) => pattern.test(prompt));
 }
 type ImageGenerationMode = 'base' | 'enhanced';
+type VideoGenerationWorkflow = 'standard' | 'motion-control';
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 type SavedJobOutput = {
   bucket: string;
@@ -43,6 +55,19 @@ type SavedJobOutput = {
   contentType: string;
   sizeBytes: number;
   providerUrl: string;
+  durationSec?: number;
+};
+type ProviderOutput = {
+  url: string;
+  mimeType: string;
+  durationSec?: number;
+};
+type ProviderJobWebhookUpdate = {
+  provider: string;
+  externalJobId: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  errorMessage?: string;
+  outputs?: ProviderOutput[];
 };
 
 @Injectable()
@@ -50,8 +75,14 @@ export class GenerationService {
   constructor(
     private prisma: PrismaService,
     private storageService: StorageService,
+    private queueHealth: QueueHealthService,
+    private jobEvents: JobEventsService,
     @Optional() @InjectQueue('image-generation') private imageQueue?: Queue,
     @Optional() @InjectQueue('video-generation') private videoQueue?: Queue,
+    @Optional() @InjectQueue('faceswap-generation') private faceswapQueue?: Queue,
+    @Optional() @InjectQueue('image-poll') private imagePollQueue?: Queue,
+    @Optional() @InjectQueue('video-poll') private videoPollQueue?: Queue,
+    @Optional() @InjectQueue('faceswap-poll') private faceswapPollQueue?: Queue,
   ) {}
 
   async createImageJob(
@@ -68,6 +99,7 @@ export class GenerationService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const stylePackId = assertOptionalUuid(data.stylePackId, 'stylePackId');
@@ -98,6 +130,7 @@ export class GenerationService {
     const numImages = this.normalizeImageCount(data.settings?.numImages as number, provider);
     const totalCost = CREDIT_COSTS.image * numImages;
     this.ensureProviderConfigured(provider, 'image', imageMode);
+    await this.requireQueueOrInline('image');
     const jobSettings = {
       ...(data.settings || {}),
       numImages,
@@ -113,6 +146,7 @@ export class GenerationService {
     };
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -157,7 +191,8 @@ export class GenerationService {
       return createdJob;
     });
 
-    await this.dispatchImageJob(job.id);
+    await this.dispatchImageJob(job.id, job.userId);
+    await this.publishJobEvent(job.userId, job);
 
     return {
       id: job.id,
@@ -173,15 +208,39 @@ export class GenerationService {
       characterId?: string;
       prompt: string;
       sourceAssetId?: string;
+      referenceVideoAssetId?: string;
       settings?: Record<string, unknown>;
     },
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const characterId = assertOptionalUuid(data.characterId, 'characterId');
     const sourceAssetId = assertOptionalUuid(data.sourceAssetId, 'sourceAssetId');
-    const prompt = assertNonEmptyString(data.prompt, 'prompt');
+    const referenceVideoAssetId = assertOptionalUuid(
+      data.referenceVideoAssetId,
+      'referenceVideoAssetId',
+    );
+    const workflow = this.normalizeVideoWorkflow(data.settings?.workflow);
+    const prompt = typeof data.prompt === 'string' ? data.prompt.trim() : '';
+    const cameraControl =
+      typeof data.settings?.cameraControl === 'string' ? data.settings.cameraControl : undefined;
+
+    if (workflow === 'standard' && !sourceAssetId && !prompt) {
+      throw new BadRequestException('Prompt is required for text-to-video generation.');
+    }
+
+    if (
+      workflow === 'standard'
+      && sourceAssetId
+      && !prompt
+      && (!cameraControl || cameraControl === 'none')
+    ) {
+      throw new BadRequestException(
+        'Provide a motion prompt or camera control for image-to-video generation.',
+      );
+    }
 
     if (containsMinorTerms(prompt)) {
       throw new BadRequestException('Prompt rejected: content referencing minors is not allowed.');
@@ -189,14 +248,39 @@ export class GenerationService {
 
     await this.assertCharacterExists(user.id, characterId);
 
-    const provider = this.getVideoProvider();
+    const provider = this.getVideoProviderForWorkflow(workflow);
     this.ensureProviderConfigured(provider, 'video');
-    const totalCost = CREDIT_COSTS.video;
+    await this.requireQueueOrInline('video');
     const sourceImageAsset = sourceAssetId
       ? await this.resolveUserImageAsset(user.id, sourceAssetId)
       : null;
+    const referenceVideoAsset = referenceVideoAssetId
+      ? await this.resolveUserVideoAsset(user.id, referenceVideoAssetId)
+      : null;
+    const referenceVideoDurationSec = this.resolveMotionControlReferenceDurationSec(
+      workflow,
+      referenceVideoAsset?.durationSec,
+      data.settings?.referenceVideoDurationSec,
+    );
+    const keepOriginalSound = data.settings?.keepOriginalSound !== false;
+
+    if (workflow === 'motion-control') {
+      if (!sourceImageAsset) {
+        throw new BadRequestException('Source image is required for motion control.');
+      }
+
+      if (!referenceVideoAsset) {
+        throw new BadRequestException('Reference video is required for motion control.');
+      }
+    }
+
+    const totalCost =
+      workflow === 'motion-control'
+        ? this.calculateMotionControlCredits(referenceVideoDurationSec, keepOriginalSound)
+        : CREDIT_COSTS.video;
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -208,11 +292,15 @@ export class GenerationService {
           characterId: characterId || null,
           jobType: 'video',
           status: 'queued',
-          prompt,
+          prompt: prompt || null,
           settingsJson: {
             ...(data.settings || {}),
+            workflow,
             sourceAssetId: sourceImageAsset?.id,
             sourceImageUrl: sourceImageAsset?.url,
+            referenceVideoAssetId: referenceVideoAsset?.id,
+            referenceVideoUrl: referenceVideoAsset?.url,
+            referenceVideoDurationSec,
           } as Prisma.InputJsonValue,
           provider,
           reservedCredits: totalCost,
@@ -240,10 +328,21 @@ export class GenerationService {
         });
       }
 
+      if (referenceVideoAsset) {
+        await tx.jobAsset.create({
+          data: {
+            jobId: createdJob.id,
+            assetId: referenceVideoAsset.id,
+            relation: 'input',
+          },
+        });
+      }
+
       return createdJob;
     });
 
-    await this.dispatchVideoJob(job.id);
+    await this.dispatchVideoJob(job.id, job.userId);
+    await this.publishJobEvent(job.userId, job);
 
     return { id: job.id, status: job.status, reservedCredits: job.reservedCredits };
   }
@@ -257,6 +356,7 @@ export class GenerationService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
+    await this.assertPendingJobLimit(user.id);
 
     const sourceAssetId = assertNonEmptyString(data.sourceAssetId, 'sourceAssetId');
     const targetAssetId = assertNonEmptyString(data.targetAssetId, 'targetAssetId');
@@ -268,9 +368,11 @@ export class GenerationService {
 
     const provider = this.getFaceSwapProvider();
     this.ensureProviderConfigured(provider, 'image');
+    await this.requireQueueOrInline('faceswap');
     const totalCost = CREDIT_COSTS['faceswap-image'];
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
+      await this.lockUserCredits(tx, user.id);
       const balance = await this.getBalance(user.id, tx);
       if (balance < totalCost) {
         throw new BadRequestException(`Insufficient credits. Need ${totalCost}, have ${balance}.`);
@@ -314,7 +416,8 @@ export class GenerationService {
       return createdJob;
     });
 
-    await this.dispatchFaceSwapJob(job.id);
+    await this.dispatchFaceSwapJob(job.id, job.userId);
+    await this.publishJobEvent(job.userId, job);
 
     return {
       id: job.id,
@@ -331,36 +434,28 @@ export class GenerationService {
     return 'mock';
   }
 
-  private async dispatchFaceSwapJob(jobId: string): Promise<void> {
-    // Face swap uses the image queue if available, otherwise runs inline
-    if (!this.imageQueue) {
-      this.runFaceSwapJobInline(jobId);
-      return;
+  private async dispatchFaceSwapJob(jobId: string, userId: string): Promise<boolean> {
+    if (INLINE_PROCESSING_ENABLED && !this.faceswapQueue) {
+      void this.processFaceSwapJob(jobId).catch(async (error) => {
+        console.error(`[GenerationService] Inline face swap job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline face swap job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
+      });
+      return true;
     }
 
-    if (!(await this.hasActiveImageWorkers())) {
-      console.warn(
-        `[GenerationService] No active workers detected. Processing face swap job ${jobId} inline.`,
-      );
-      this.runFaceSwapJobInline(jobId);
-      return;
+    const queue = this.faceswapQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'faceswap');
     }
 
     try {
-      await this.imageQueue.add('faceswap-image', { jobId });
+      return await this.enqueueQueueJob(queue, 'faceswap', 'faceswap-image', jobId);
     } catch (error) {
-      console.warn(
-        `[GenerationService] Failed to enqueue face swap job ${jobId}. Falling back to inline processing.`,
-        error,
-      );
-      this.runFaceSwapJobInline(jobId);
+      console.error(`[GenerationService] Failed to enqueue face swap job ${jobId}:`, error);
+      return this.failJobAndThrow503(jobId, userId, 'faceswap');
     }
-  }
-
-  private runFaceSwapJobInline(jobId: string): void {
-    void this.processFaceSwapJob(jobId).catch((error) => {
-      console.error(`[GenerationService] Inline face swap job ${jobId} failed:`, error);
-    });
   }
 
   private async claimQueuedFaceSwapJob(jobId: string): Promise<GenerationJob | null> {
@@ -384,8 +479,6 @@ export class GenerationService {
   async processFaceSwapJob(jobId: string): Promise<void> {
     const genJob = await this.claimQueuedFaceSwapJob(jobId);
     if (!genJob) return;
-
-    let savedOutputs: SavedJobOutput[] = [];
 
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
@@ -413,31 +506,17 @@ export class GenerationService {
         throw new Error('Face swap completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-image',
         'png',
+        createdJob.externalJobId,
       );
-
-      await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        await tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed face swap job ${jobId}`,
       );
@@ -450,7 +529,7 @@ export class GenerationService {
     initialStatus: 'queued' | 'running' | 'completed',
   ): Promise<{
     status: 'queued' | 'running' | 'completed' | 'failed';
-    outputs?: Array<{ url: string; mimeType: string }>;
+    outputs?: ProviderOutput[];
     errorMessage?: string;
   }> {
     let jobResult =
@@ -476,6 +555,263 @@ export class GenerationService {
     };
   }
 
+  async handleProviderJobWebhook(update: ProviderJobWebhookUpdate): Promise<{
+    handled: boolean;
+    retryable: boolean;
+    reason: string;
+  }> {
+    const encodedRequestIdFragment = `::${update.externalJobId}`;
+    const genJob = await this.prisma.generationJob.findFirst({
+      where: {
+        provider: update.provider,
+        OR: [
+          { externalJobId: update.externalJobId },
+          { externalJobId: { endsWith: encodedRequestIdFragment } },
+          { externalJobId: { contains: encodedRequestIdFragment } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!genJob) {
+      return {
+        handled: false,
+        retryable: update.status === 'completed' || update.status === 'failed',
+        reason: `No generation job found for ${update.provider}:${update.externalJobId}`,
+      };
+    }
+
+    if (['completed', 'failed', 'canceled'].includes(genJob.status)) {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Job ${genJob.id} already reached terminal status ${genJob.status}`,
+      };
+    }
+
+    if (update.status === 'queued' || update.status === 'running') {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Ignoring non-terminal ${update.provider} webhook for job ${genJob.id}`,
+      };
+    }
+
+    if (update.status === 'failed') {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        update.errorMessage || `${update.provider} reported job failure`,
+        this.getRefundReasonForJob(genJob, 'provider webhook failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed from provider webhook`,
+      };
+    }
+
+    const canUseWebhookOutputsDirectly =
+      update.status === 'completed'
+      && !!update.outputs?.length
+      && !(genJob.externalJobId || '').startsWith('multi:');
+
+    const providerResult = canUseWebhookOutputsDirectly
+      ? {
+          status: 'completed' as const,
+          outputs: update.outputs,
+        }
+      : await this.resolveProviderWebhookResult(genJob);
+    if (providerResult.status === 'queued' || providerResult.status === 'running') {
+      return {
+        handled: false,
+        retryable: true,
+        reason: `Provider result for job ${genJob.id} is still ${providerResult.status}`,
+      };
+    }
+
+    if (providerResult.status === 'failed') {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        providerResult.errorMessage || 'Generation completed without any outputs',
+        this.getRefundReasonForJob(genJob, 'provider webhook completion failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed after provider webhook lookup`,
+      };
+    }
+
+    if (providerResult.status !== 'completed') {
+      return {
+        handled: false,
+        retryable: true,
+        reason: `Provider result for job ${genJob.id} did not reach a terminal completion state`,
+      };
+    }
+
+    const outputs = providerResult.outputs ?? [];
+    if (outputs.length === 0) {
+      await this.failJob(
+        genJob.id,
+        genJob.userId,
+        'Generation completed without any outputs',
+        this.getRefundReasonForJob(genJob, 'provider webhook completion failure'),
+      );
+
+      return {
+        handled: true,
+        retryable: false,
+        reason: `Marked job ${genJob.id} as failed after empty provider webhook result`,
+      };
+    }
+
+    const completedJob = await this.completeJobWithOutputs(
+      genJob,
+      outputs,
+      genJob.jobType === 'video' ? 'generated-video' : 'generated-image',
+      genJob.jobType === 'video' ? 'mp4' : 'png',
+      genJob.externalJobId || update.externalJobId,
+    );
+
+    if (!completedJob) {
+      return {
+        handled: false,
+        retryable: false,
+        reason: `Job ${genJob.id} was finalized by another worker before webhook completion`,
+      };
+    }
+
+    return {
+      handled: true,
+      retryable: false,
+      reason: `Completed job ${genJob.id} from provider webhook`,
+    };
+  }
+
+  private async resolveProviderWebhookResult(
+    genJob: GenerationJob,
+  ): Promise<
+    | { status: 'queued' | 'running' }
+    | {
+        status: 'completed' | 'failed';
+        outputs?: ProviderOutput[];
+        errorMessage?: string;
+      }
+  > {
+    if (!genJob.externalJobId) {
+      return {
+        status: 'failed',
+        errorMessage: `Generation job ${genJob.id} does not have an external provider job ID yet`,
+      };
+    }
+
+    switch (genJob.jobType) {
+      case 'image': {
+        const adapter = createImageAdapter(
+          genJob.provider,
+          this.getImageProviderApiKey(genJob.provider),
+        );
+        return adapter.getJob(genJob.externalJobId);
+      }
+      case 'video': {
+        const adapter = createVideoAdapter(
+          genJob.provider,
+          this.getVideoProviderApiKey(genJob.provider),
+        );
+        const result = await adapter.getJob(genJob.externalJobId);
+        return {
+          status: result.status,
+          outputs: result.outputs?.map((output) => ({
+            url: output.url,
+            mimeType: output.mimeType,
+            durationSec: output.durationSec,
+          })),
+          errorMessage: result.errorMessage,
+        };
+      }
+      case 'faceswap-image': {
+        const adapter = createFaceSwapAdapter(
+          genJob.provider,
+          this.getImageProviderApiKey(genJob.provider),
+        );
+        return adapter.getJob(genJob.externalJobId);
+      }
+      default:
+        return {
+          status: 'failed',
+          errorMessage: `${genJob.jobType} jobs do not support provider webhooks`,
+        };
+    }
+  }
+
+  private async completeJobWithOutputs(
+    genJob: GenerationJob,
+    outputs: ProviderOutput[],
+    assetKind: 'generated-image' | 'generated-video',
+    fallbackExtension: string,
+    externalJobId: string,
+  ): Promise<GenerationJob | null> {
+    const savedOutputs = await this.saveOutputsToStorage(
+      genJob.id,
+      genJob.userId,
+      outputs,
+      fallbackExtension,
+    );
+
+    try {
+      const completedJob = await this.prisma.$transaction(async (tx) => {
+        const completion = await tx.generationJob.updateMany({
+          where: {
+            id: genJob.id,
+            status: { in: ['queued', 'running'] },
+          },
+          data: {
+            status: 'completed',
+            externalJobId,
+            finalCredits: genJob.reservedCredits,
+            completedAt: new Date(),
+            errorMessage: null,
+            failedAt: null,
+          },
+        });
+
+        if (completion.count === 0) {
+          return null;
+        }
+
+        await this.persistSavedOutputs(tx, genJob.id, genJob.userId, assetKind, savedOutputs);
+        return tx.generationJob.findUnique({ where: { id: genJob.id } });
+      });
+
+      if (!completedJob) {
+        await this.cleanupSavedOutputs(savedOutputs);
+        return null;
+      }
+
+      await this.publishJobEvent(genJob.userId, completedJob);
+      return completedJob;
+    } catch (error) {
+      await this.cleanupSavedOutputs(savedOutputs);
+      throw error;
+    }
+  }
+
+  private getRefundReasonForJob(genJob: GenerationJob, reason: string): string {
+    switch (genJob.jobType) {
+      case 'video':
+        return `Refund for failed video job ${genJob.id} (${reason})`;
+      case 'faceswap-image':
+        return `Refund for failed face swap job ${genJob.id} (${reason})`;
+      default:
+        return `Refund for failed job ${genJob.id} (${reason})`;
+    }
+  }
+
   private async getBalance(
     userId: string,
     client: PrismaClientLike = this.prisma,
@@ -485,6 +821,25 @@ export class GenerationService {
       _sum: { amount: true },
     });
     return result._sum.amount || 0;
+  }
+
+  private async assertPendingJobLimit(userId: string): Promise<void> {
+    const count = await this.prisma.generationJob.count({
+      where: { userId, status: { in: ['queued', 'running'] } },
+    });
+    if (count >= MAX_PENDING_JOBS_PER_USER) {
+      throw new BadRequestException(
+        `You have ${count} pending jobs. Wait for some to finish before submitting more.`,
+      );
+    }
+  }
+
+  private async lockUserCredits(
+    client: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    // Match the webhook locking pattern and avoid integer-width mismatches in Prisma bindings.
+    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
   }
 
   private getDefaultImageProvider(): string {
@@ -517,23 +872,56 @@ export class GenerationService {
 
   private resolveImageProvider(mode?: ImageGenerationMode): string {
     if (mode === 'base') {
-      return 'fal';
+      if (process.env.FAL_API_KEY) {
+        return 'fal';
+      }
+      if (process.env.IMAGE_PROVIDER) {
+        return process.env.IMAGE_PROVIDER;
+      }
+      return this.getDefaultImageProvider();
     }
 
     if (mode === 'enhanced') {
-      return 'google';
+      if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+        return 'google';
+      }
+      if (process.env.IMAGE_PROVIDER) {
+        return process.env.IMAGE_PROVIDER;
+      }
+      return this.getDefaultImageProvider();
+    }
+
+    if (process.env.IMAGE_PROVIDER) {
+      return process.env.IMAGE_PROVIDER;
     }
 
     return this.getDefaultImageProvider();
   }
 
   private normalizeImageCount(requestedCount: number | undefined, provider: string): number {
-    const normalizedCount = Number.isFinite(requestedCount)
-      ? Math.trunc(requestedCount as number)
-      : 4;
     const maxImages = provider === 'google' || provider === 'gemini' ? 4 : 8;
 
-    return Math.max(1, Math.min(normalizedCount, maxImages));
+    if (requestedCount === undefined || requestedCount === null) {
+      return 4;
+    }
+
+    if (!Number.isFinite(requestedCount)) {
+      throw new BadRequestException(`numImages must be a finite number`);
+    }
+
+    const count = Math.trunc(requestedCount);
+    if (count < 1) {
+      throw new BadRequestException(
+        `numImages must be at least 1, got ${requestedCount}`,
+      );
+    }
+    if (count > maxImages) {
+      throw new BadRequestException(
+        `numImages must be at most ${maxImages} for provider "${provider}", got ${requestedCount}`,
+      );
+    }
+
+    return count;
   }
 
   async ensureJobProcessing(jobId: string): Promise<void> {
@@ -553,42 +941,104 @@ export class GenerationService {
       return;
     }
 
-    switch (job.jobType) {
-      case 'image':
-        if (Date.now() - job.createdAt.getTime() < QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS) {
-          return;
-        }
-        console.warn(`[GenerationService] Rescuing stalled image job ${jobId}.`);
-        await this.dispatchImageJob(jobId);
+    const thresholdMs =
+      job.jobType === 'video'
+        ? QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS
+        : QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS;
+    if (Date.now() - job.createdAt.getTime() < thresholdMs) {
+      return;
+    }
+
+    if (!(await this.canRescueQueuedJob(job.jobType))) {
+      return;
+    }
+
+    try {
+      const rescued = await this.dispatchQueuedJob(jobId);
+      if (!rescued) {
         return;
-      case 'video':
-        if (Date.now() - job.createdAt.getTime() < QUEUED_VIDEO_JOB_RESCUE_THRESHOLD_MS) {
+      }
+
+      switch (job.jobType) {
+        case 'image':
+          console.warn(`[GenerationService] Rescuing stalled image job ${jobId}.`);
           return;
-        }
-        console.warn(`[GenerationService] Rescuing stalled video job ${jobId}.`);
-        await this.dispatchVideoJob(jobId);
-        return;
-      case 'faceswap-image':
-        if (Date.now() - job.createdAt.getTime() < QUEUED_IMAGE_JOB_RESCUE_THRESHOLD_MS) {
+        case 'video':
+          console.warn(`[GenerationService] Rescuing stalled video job ${jobId}.`);
           return;
-        }
-        console.warn(`[GenerationService] Rescuing stalled face swap job ${jobId}.`);
-        await this.dispatchFaceSwapJob(jobId);
-        return;
-      default:
-        await this.failUnsupportedQueuedJob(job.id, job.userId, job.reservedCredits, job.jobType);
+        case 'faceswap-image':
+          console.warn(`[GenerationService] Rescuing stalled face swap job ${jobId}.`);
+          return;
+        default:
+          await this.failUnsupportedQueuedJob(job.id, job.userId, job.jobType);
+      }
+    } catch (error) {
+      console.warn(`[GenerationService] Failed to rescue queued job ${jobId}.`, error);
     }
   }
 
-  async ensureImageJobProcessing(jobId: string): Promise<void> {
-    await this.ensureJobProcessing(jobId);
+  async reconcileRunningJob(jobId: string): Promise<void> {
+    const genJob = await this.prisma.generationJob.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!genJob || genJob.status !== 'running' || !genJob.externalJobId) {
+      return;
+    }
+
+    if (!this.supportsCrossProcessRunningJobReconciliation(genJob)) {
+      return;
+    }
+
+    if (!this.shouldReconcileRunningJob(genJob)) {
+      return;
+    }
+
+    try {
+      const providerResult = await this.resolveProviderWebhookResult(genJob);
+
+      if (providerResult.status === 'queued' || providerResult.status === 'running') {
+        return;
+      }
+
+      if (providerResult.status === 'failed') {
+        await this.failJob(
+          genJob.id,
+          genJob.userId,
+          providerResult.errorMessage || `${genJob.provider} reported job failure`,
+          this.getRefundReasonForJob(genJob, 'running job reconciliation failure'),
+        );
+        return;
+      }
+
+      if (providerResult.status !== 'completed') {
+        return;
+      }
+
+      const outputs = 'outputs' in providerResult ? providerResult.outputs ?? [] : [];
+      if (outputs.length === 0) {
+        await this.failJob(
+          genJob.id,
+          genJob.userId,
+          'Generation completed without any outputs',
+          this.getRefundReasonForJob(genJob, 'running job reconciliation failure'),
+        );
+        return;
+      }
+
+      await this.completeJobWithOutputs(
+        genJob,
+        outputs,
+        genJob.jobType === 'video' ? 'generated-video' : 'generated-image',
+        genJob.jobType === 'video' ? 'mp4' : 'png',
+        genJob.externalJobId,
+      );
+    } catch (error) {
+      console.warn(`[GenerationService] Failed to reconcile running job ${jobId}.`, error);
+    }
   }
 
-  async ensureVideoJobProcessing(jobId: string): Promise<void> {
-    await this.ensureJobProcessing(jobId);
-  }
-
-  async dispatchQueuedJob(jobId: string): Promise<void> {
+  async dispatchQueuedJob(jobId: string): Promise<boolean> {
     const job = await this.prisma.generationJob.findUnique({
       where: { id: jobId },
       select: {
@@ -601,110 +1051,166 @@ export class GenerationService {
     });
 
     if (!job || job.status !== 'queued') {
-      return;
+      return false;
     }
 
     switch (job.jobType) {
       case 'image':
-        await this.dispatchImageJob(jobId);
-        return;
+        return this.dispatchImageJob(jobId, job.userId);
       case 'video':
-        await this.dispatchVideoJob(jobId);
-        return;
+        return this.dispatchVideoJob(jobId, job.userId);
       case 'faceswap-image':
-        await this.dispatchFaceSwapJob(jobId);
-        return;
+        return this.dispatchFaceSwapJob(jobId, job.userId);
       default:
-        await this.failUnsupportedQueuedJob(job.id, job.userId, job.reservedCredits, job.jobType);
+        await this.failUnsupportedQueuedJob(job.id, job.userId, job.jobType);
+        return false;
     }
   }
 
-  private async dispatchImageJob(jobId: string): Promise<void> {
-    if (!this.imageQueue) {
-      this.runImageJobInline(jobId);
-      return;
+  private async dispatchImageJob(jobId: string, userId: string): Promise<boolean> {
+    if (INLINE_PROCESSING_ENABLED && !this.imageQueue) {
+      void this.processImageJob(jobId).catch(async (error) => {
+        console.error(`[GenerationService] Inline image job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline image job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
+      });
+      return true;
     }
 
-    if (!(await this.hasActiveImageWorkers())) {
-      console.warn(
-        `[GenerationService] No active media workers detected. Processing image job ${jobId} inline.`,
-      );
-      this.runImageJobInline(jobId);
-      return;
+    const queue = this.imageQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'image');
     }
 
     try {
-      await this.imageQueue.add('generate-image', { jobId });
+      return await this.enqueueQueueJob(queue, 'image', 'generate-image', jobId);
     } catch (error) {
-      console.warn(
-        `[GenerationService] Failed to enqueue image job ${jobId}. Falling back to inline processing.`,
-        error,
-      );
-      this.runImageJobInline(jobId);
+      console.error(`[GenerationService] Failed to enqueue image job ${jobId}:`, error);
+      return this.failJobAndThrow503(jobId, userId, 'image');
     }
   }
 
-  private async dispatchVideoJob(jobId: string): Promise<void> {
-    if (!this.videoQueue) {
-      this.runVideoJobInline(jobId);
-      return;
+  private async dispatchVideoJob(jobId: string, userId: string): Promise<boolean> {
+    if (INLINE_PROCESSING_ENABLED && !this.videoQueue) {
+      void this.processVideoJob(jobId).catch(async (error) => {
+        console.error(`[GenerationService] Inline video job ${jobId} failed:`, error);
+        await this.failJob(jobId, userId, error instanceof Error ? error.message : 'Unknown error', `Refund for failed inline video job ${jobId}`).catch((e) =>
+          console.error(`[GenerationService] Failed to mark inline job ${jobId} as failed:`, e),
+        );
+      });
+      return true;
     }
 
-    if (!(await this.hasActiveVideoWorkers())) {
-      console.warn(
-        `[GenerationService] No active video workers detected. Processing video job ${jobId} inline.`,
-      );
-      this.runVideoJobInline(jobId);
-      return;
+    const queue = this.videoQueue;
+    if (!queue) {
+      return this.failJobAndThrow503(jobId, userId, 'video');
     }
 
     try {
-      await this.videoQueue.add('generate-video', { jobId });
+      return await this.enqueueQueueJob(queue, 'video', 'generate-video', jobId);
     } catch (error) {
-      console.warn(
-        `[GenerationService] Failed to enqueue video job ${jobId}. Falling back to inline processing.`,
-        error,
-      );
-      this.runVideoJobInline(jobId);
+      console.error(`[GenerationService] Failed to enqueue video job ${jobId}:`, error);
+      return this.failJobAndThrow503(jobId, userId, 'video');
     }
   }
 
-  private runImageJobInline(jobId: string): void {
-    void this.processImageJob(jobId).catch((error) => {
-      console.error(`[GenerationService] Inline image job ${jobId} failed:`, error);
+  private async canRescueQueuedJob(jobType: string): Promise<boolean> {
+    if (INLINE_PROCESSING_ENABLED) {
+      return true;
+    }
+
+    switch (jobType) {
+      case 'image':
+        return this.queueHealth.isQueueHealthy('image');
+      case 'video':
+        return this.queueHealth.isQueueHealthy('video');
+      case 'faceswap-image':
+        return this.queueHealth.isQueueHealthy('faceswap');
+      default:
+        return true;
+    }
+  }
+
+  private async requireQueueOrInline(queueName: 'image' | 'video' | 'faceswap'): Promise<void> {
+    if (INLINE_PROCESSING_ENABLED) return;
+    const healthy = await this.queueHealth.isQueueHealthy(queueName);
+    if (!healthy) {
+      throw new ServiceUnavailableException(
+        `Generation service temporarily unavailable. Please try again later.`,
+      );
+    }
+  }
+
+  private buildQueueJobId(queueName: 'image' | 'video' | 'faceswap', jobId: string): string {
+    return `${queueName}-${jobId}`;
+  }
+
+  private async enqueueQueueJob(
+    queue: Queue,
+    queueName: 'image' | 'video' | 'faceswap',
+    queueJobName: string,
+    jobId: string,
+  ): Promise<boolean> {
+    const queueJobId = this.buildQueueJobId(queueName, jobId);
+    const isTerminalState = (state: string) => state === 'completed' || state === 'failed';
+
+    const removeTerminalJobIfPresent = async (): Promise<boolean> => {
+      const existingJob = await queue.getJob(queueJobId);
+      if (!existingJob) {
+        return false;
+      }
+
+      const state = await existingJob.getState();
+      if (!isTerminalState(state)) {
+        return true;
+      }
+
+      await existingJob.remove();
+      return false;
+    };
+
+    if (await removeTerminalJobIfPresent()) {
+      return false;
+    }
+
+    let queueJob = await queue.add(queueJobName, { jobId }, {
+      jobId: queueJobId,
+      removeOnComplete: 100,
+      removeOnFail: 500,
     });
+    let state = await queueJob.getState();
+
+    // BullMQ deduplicates duplicate job IDs by returning the existing job, so
+    // retry once if we raced with a terminal queue entry.
+    if (isTerminalState(state)) {
+      await queueJob.remove();
+
+      if (await removeTerminalJobIfPresent()) {
+        return false;
+      }
+
+      queueJob = await queue.add(queueJobName, { jobId }, {
+        jobId: queueJobId,
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      });
+      state = await queueJob.getState();
+    }
+
+    return !isTerminalState(state);
   }
 
-  private runVideoJobInline(jobId: string): void {
-    void this.processVideoJob(jobId).catch((error) => {
-      console.error(`[GenerationService] Inline video job ${jobId} failed:`, error);
-    });
-  }
-
-  private async hasActiveImageWorkers(): Promise<boolean> {
-    if (!this.imageQueue) {
-      return false;
-    }
-
-    try {
-      return (await this.imageQueue.getWorkersCount()) > 0;
-    } catch (error) {
-      console.warn('[GenerationService] Failed to inspect media worker availability.', error);
-      return false;
-    }
-  }
-
-  private async hasActiveVideoWorkers(): Promise<boolean> {
-    if (!this.videoQueue) {
-      return false;
-    }
-
-    try {
-      return (await this.videoQueue.getWorkersCount()) > 0;
-    } catch (error) {
-      console.warn('[GenerationService] Failed to inspect video worker availability.', error);
-      return false;
-    }
+  private async failJobAndThrow503(jobId: string, userId: string, queueName: string): Promise<never> {
+    await this.failJob(
+      jobId,
+      userId,
+      `Queue unavailable: ${queueName}`,
+      `Refund for failed ${queueName} job ${jobId} (queue unavailable)`,
+    );
+    throw new ServiceUnavailableException(
+      'Generation service temporarily unavailable. Credits have been refunded. Please try again later.',
+    );
   }
 
   private async claimQueuedImageJob(jobId: string): Promise<GenerationJob | null> {
@@ -765,8 +1271,6 @@ export class GenerationService {
       return;
     }
 
-    let savedOutputs: SavedJobOutput[] = [];
-
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
       const adapter = createImageAdapter(
@@ -802,31 +1306,17 @@ export class GenerationService {
         throw new Error('Generation completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-image',
         'png',
+        createdJob.externalJobId,
       );
-
-      await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-image', savedOutputs);
-        await tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed job ${jobId}`,
       );
@@ -868,7 +1358,7 @@ export class GenerationService {
   private async saveOutputsToStorage(
     jobId: string,
     userId: string,
-    outputs: Array<{ url: string; mimeType: string }>,
+    outputs: Array<{ url: string; mimeType: string; durationSec?: number }>,
     fallbackExtension: string,
   ): Promise<SavedJobOutput[]> {
     const savedOutputs: SavedJobOutput[] = [];
@@ -890,6 +1380,7 @@ export class GenerationService {
           contentType: savedOutput.contentType,
           sizeBytes: savedOutput.sizeBytes,
           providerUrl: output.url,
+          durationSec: output.durationSec,
         });
       }
     } catch (error) {
@@ -916,6 +1407,10 @@ export class GenerationService {
           storageKey: output.storageKey,
           mimeType: output.contentType,
           fileSizeBytes: BigInt(output.sizeBytes),
+          durationSec:
+            typeof output.durationSec === 'number'
+              ? new Prisma.Decimal(output.durationSec.toFixed(2))
+              : undefined,
           moderationStatus: 'approved',
           metadataJson: { providerUrl: output.providerUrl },
         },
@@ -958,6 +1453,39 @@ export class GenerationService {
     return extensionMap[mimeType] || fallback;
   }
 
+  private shouldReconcileRunningJob(
+    genJob: Pick<GenerationJob, 'jobType' | 'createdAt' | 'startedAt'>,
+  ): boolean {
+    const startedAtMs = genJob.startedAt?.getTime() ?? genJob.createdAt.getTime();
+    const elapsedMs = Date.now() - startedAtMs;
+
+    switch (genJob.jobType) {
+      case 'video':
+        return elapsedMs >= RUNNING_VIDEO_JOB_RECONCILE_THRESHOLD_MS;
+      case 'faceswap-image':
+        return elapsedMs >= RUNNING_FACESWAP_JOB_RECONCILE_THRESHOLD_MS;
+      default:
+        return elapsedMs >= RUNNING_IMAGE_JOB_RECONCILE_THRESHOLD_MS;
+    }
+  }
+
+  private supportsCrossProcessRunningJobReconciliation(
+    genJob: Pick<GenerationJob, 'jobType' | 'provider'>,
+  ): boolean {
+    // Google image generation is executed inline inside the worker process and
+    // tracks intermediate job state in adapter memory only. Polling it from a
+    // different API/worker process will incorrectly report "result unavailable"
+    // and can fail a healthy job mid-flight.
+    if (
+      genJob.jobType === 'image'
+      && (genJob.provider === 'google' || genJob.provider === 'gemini')
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
   private getVideoProvider(): string {
     if (process.env.VIDEO_PROVIDER) {
       return process.env.VIDEO_PROVIDER;
@@ -969,6 +1497,14 @@ export class GenerationService {
       return 'kling';
     }
     return 'mock';
+  }
+
+  private getVideoProviderForWorkflow(workflow: VideoGenerationWorkflow): string {
+    if (workflow === 'motion-control') {
+      return 'fal';
+    }
+
+    return this.getVideoProvider();
   }
 
   private getVideoProviderApiKey(provider: string): string {
@@ -1018,8 +1554,6 @@ export class GenerationService {
     const genJob = await this.claimQueuedVideoJob(jobId);
     if (!genJob) return;
 
-    let savedOutputs: SavedJobOutput[] = [];
-
     try {
       const settings = (genJob.settingsJson || {}) as Record<string, unknown>;
       const adapter = createVideoAdapter(
@@ -1030,11 +1564,15 @@ export class GenerationService {
       const createdJob = await adapter.createJob({
         prompt: genJob.prompt || '',
         sourceImageUrl: settings.sourceImageUrl as string | undefined,
+        referenceVideoUrl: settings.referenceVideoUrl as string | undefined,
         aspectRatio: settings.aspectRatio as string | undefined,
         durationSec: settings.durationSec as number | undefined,
         settings: {
+          workflow: settings.workflow,
           motionAmount: settings.motionAmount,
           cameraControl: settings.cameraControl,
+          characterOrientation: settings.characterOrientation,
+          keepOriginalSound: settings.keepOriginalSound,
         },
       });
 
@@ -1052,31 +1590,17 @@ export class GenerationService {
         throw new Error('Video generation completed without any outputs');
       }
 
-      savedOutputs = await this.saveOutputsToStorage(
-        jobId,
-        genJob.userId,
+      await this.completeJobWithOutputs(
+        genJob,
         resolvedJob.outputs,
+        'generated-video',
         'mp4',
+        createdJob.externalJobId,
       );
-
-      await this.prisma.$transaction(async (tx) => {
-        await this.persistSavedOutputs(tx, jobId, genJob.userId, 'generated-video', savedOutputs);
-        await tx.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'completed',
-            externalJobId: createdJob.externalJobId,
-            finalCredits: genJob.reservedCredits,
-            completedAt: new Date(),
-          },
-        });
-      });
     } catch (error) {
-      await this.cleanupSavedOutputs(savedOutputs);
       await this.failJob(
         jobId,
         genJob.userId,
-        genJob.reservedCredits,
         error instanceof Error ? error.message : 'Unknown error',
         `Refund for failed video job ${jobId}`,
       );
@@ -1086,25 +1610,28 @@ export class GenerationService {
   private async failJob(
     jobId: string,
     userId: string,
-    reservedCredits: number,
     errorMessage: string,
     refundReason: string,
   ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.generationJob.update({
-        where: { id: jobId },
-        data: {
-          status: 'failed',
-          errorMessage,
-          failedAt: new Date(),
-        },
+    const failedAt = new Date();
+
+    const updatedJob = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.generationJob.updateMany({
+        where: { id: jobId, status: { in: ['queued', 'running'] } },
+        data: { status: 'failed', errorMessage, failedAt },
       });
 
-      if (reservedCredits > 0) {
+      if (result.count === 0) return null;
+
+      const job = await tx.generationJob.findUnique({
+        where: { id: jobId },
+      });
+
+      if (job && job.reservedCredits > 0) {
         await tx.creditLedger.create({
           data: {
             userId,
-            amount: reservedCredits,
+            amount: job.reservedCredits,
             entryType: 'job_refund',
             reason: refundReason,
             referenceType: 'job',
@@ -1112,13 +1639,57 @@ export class GenerationService {
           },
         });
       }
+
+      return job;
     });
+
+    if (updatedJob) {
+      await this.publishJobEvent(userId, updatedJob);
+    }
+  }
+
+  private async publishJobEvent(userId: string, job: GenerationJob): Promise<void> {
+    let outputs: Array<{ id: string; url: string; mimeType: string }> | undefined;
+
+    if (job.status === 'completed') {
+      try {
+        const jobAssets = await this.prisma.jobAsset.findMany({
+          where: { jobId: job.id, relation: 'output' },
+          include: { asset: true },
+        });
+        if (jobAssets.length > 0) {
+          outputs = await Promise.all(
+            jobAssets.map(async (ja) => ({
+              id: ja.asset.id,
+              url: await this.storageService.getAssetUrl(ja.asset),
+              mimeType: ja.asset.mimeType,
+            })),
+          );
+        }
+      } catch {
+        // Non-critical: event will be sent without outputs
+      }
+    }
+
+    const event: JobEvent = {
+      jobId: job.id,
+      jobType: job.jobType,
+      status: job.status,
+      reservedCredits: job.reservedCredits,
+      finalCredits: job.finalCredits,
+      errorMessage: job.errorMessage,
+      createdAt: job.createdAt.toISOString(),
+      startedAt: job.startedAt?.toISOString() || null,
+      completedAt: job.completedAt?.toISOString() || null,
+      failedAt: job.failedAt?.toISOString() || null,
+      outputs,
+    };
+    await this.jobEvents.publishJobEvent(userId, event);
   }
 
   private async failUnsupportedQueuedJob(
     jobId: string,
     userId: string,
-    reservedCredits: number,
     jobType: string,
   ): Promise<void> {
     const claimed = await this.prisma.generationJob.updateMany({
@@ -1141,7 +1712,6 @@ export class GenerationService {
     await this.failJob(
       jobId,
       userId,
-      reservedCredits,
       `${jobType} jobs are not implemented on the server`,
       `Refund for unsupported ${jobType} job ${jobId}`,
     );
@@ -1328,5 +1898,69 @@ export class GenerationService {
       id: asset.id,
       url: await this.storageService.getAssetUrl(asset),
     };
+  }
+
+  private normalizeVideoWorkflow(value: unknown): VideoGenerationWorkflow {
+    return value === 'motion-control' ? 'motion-control' : 'standard';
+  }
+
+  private async resolveUserVideoAsset(
+    userId: string,
+    assetId: string,
+  ): Promise<{ id: string; url: string; durationSec: number | null }> {
+    const asset = await this.prisma.asset.findFirst({
+      where: {
+        id: assetId,
+        userId,
+        moderationStatus: { not: 'deleted' },
+      },
+    });
+
+    if (!asset) {
+      throw new NotFoundException('Reference video not found');
+    }
+
+    if (!asset.mimeType.startsWith('video/')) {
+      throw new BadRequestException('Reference asset must be a video');
+    }
+
+    return {
+      id: asset.id,
+      url: await this.storageService.getAssetUrl(asset),
+      durationSec: asset.durationSec ? Number(asset.durationSec) : null,
+    };
+  }
+
+  private calculateMotionControlCredits(durationSec: number, keepOriginalSound: boolean): number {
+    const perSecondRate = keepOriginalSound
+      ? MOTION_CONTROL_CREDITS_PER_SECOND.withAudio
+      : MOTION_CONTROL_CREDITS_PER_SECOND.withoutAudio;
+
+    return Math.max(1, Math.ceil(durationSec)) * perSecondRate;
+  }
+
+  private resolveMotionControlReferenceDurationSec(
+    workflow: VideoGenerationWorkflow,
+    assetDurationSec: number | null | undefined,
+    settingsDurationSec: unknown,
+  ): number {
+    if (workflow !== 'motion-control') {
+      return 0;
+    }
+
+    const resolvedDurationSec =
+      typeof assetDurationSec === 'number' && Number.isFinite(assetDurationSec) && assetDurationSec > 0
+        ? assetDurationSec
+        : typeof settingsDurationSec === 'number' && Number.isFinite(settingsDurationSec) && settingsDurationSec > 0
+          ? settingsDurationSec
+          : NaN;
+
+    if (!Number.isFinite(resolvedDurationSec)) {
+      throw new BadRequestException(
+        'Reference video duration is unavailable. Re-upload the video or choose a different reference.',
+      );
+    }
+
+    return resolvedDurationSec;
   }
 }

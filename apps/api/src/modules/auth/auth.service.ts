@@ -1,4 +1,11 @@
-import { BadGatewayException, BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+    BadGatewayException,
+    BadRequestException,
+    Injectable,
+    InternalServerErrorException,
+    Logger,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 type ClerkEmailAddress = {
@@ -16,7 +23,13 @@ type ClerkUserResponse = {
 
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
+
     constructor(private prisma: PrismaService) { }
+
+    private normalizeEmail(email: string): string {
+        return email.trim().toLowerCase();
+    }
 
     private async getClerkUserProfile(clerkUserId: string) {
         const secretKey = process.env.CLERK_SECRET_KEY;
@@ -63,53 +76,127 @@ export class AuthService {
     }
 
     async syncUser(clerkUserId: string) {
-        const { email, fullName, avatarUrl } = await this.getClerkUserProfile(clerkUserId);
+        const profile = await this.getClerkUserProfile(clerkUserId);
+        const email = this.normalizeEmail(profile.email);
+        const fullName = profile.fullName || null;
+        const avatarUrl = profile.avatarUrl || null;
 
-        const user = await this.prisma.$transaction(async (tx) => {
-            const syncedUser = await tx.user.upsert({
-                where: { clerkUserId },
-                update: {
-                    email,
-                    fullName: fullName || undefined,
-                    avatarUrl: avatarUrl || undefined,
-                    updatedAt: new Date(),
-                },
-                create: {
-                    clerkUserId,
-                    email,
-                    fullName,
-                    avatarUrl,
-                    role: 'user',
-                    status: 'active',
-                },
-            });
+        let user;
 
-            const existingSubscription = await tx.subscription.findUnique({
-                where: { userId: syncedUser.id },
-            });
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+            try {
+                user = await this.prisma.withSerializableTransaction(async (tx) => {
+                    const existingByClerk = await tx.user.findUnique({
+                        where: { clerkUserId },
+                    });
 
-            if (!existingSubscription) {
-                await tx.subscription.create({
-                    data: {
-                        userId: syncedUser.id,
-                        stripeCustomerId: `pending_${syncedUser.id}`,
-                        planCode: 'free',
-                        status: 'active',
-                    },
+                    let syncedUser;
+
+                    if (existingByClerk) {
+                        const emailOwnedByAnotherUser =
+                            existingByClerk.email !== email
+                                ? await tx.user.findFirst({
+                                    where: { email: { equals: email, mode: 'insensitive' } },
+                                })
+                                : null;
+
+                        if (emailOwnedByAnotherUser && emailOwnedByAnotherUser.id !== existingByClerk.id) {
+                            this.logger.warn(
+                                `Skipping email update for Clerk user ${clerkUserId} because ${email} is already linked to user ${emailOwnedByAnotherUser.id}.`,
+                            );
+
+                            syncedUser = await tx.user.update({
+                                where: { id: existingByClerk.id },
+                                data: {
+                                    fullName,
+                                    avatarUrl,
+                                },
+                            });
+                        } else {
+                            syncedUser = await tx.user.update({
+                                where: { id: existingByClerk.id },
+                                data: {
+                                    email,
+                                    fullName,
+                                    avatarUrl,
+                                },
+                            });
+                        }
+                    } else {
+                        const existingByEmail = await tx.user.findFirst({
+                            where: { email: { equals: email, mode: 'insensitive' } },
+                        });
+
+                        if (existingByEmail) {
+                            this.logger.log(
+                                `Linking existing user ${existingByEmail.id} to Clerk user ${clerkUserId} via email ${email}.`,
+                            );
+
+                            syncedUser = await tx.user.update({
+                                where: { id: existingByEmail.id },
+                                data: {
+                                    clerkUserId,
+                                    fullName,
+                                    avatarUrl,
+                                },
+                            });
+                        } else {
+                            syncedUser = await tx.user.create({
+                                data: {
+                                    clerkUserId,
+                                    email,
+                                    fullName,
+                                    avatarUrl,
+                                    role: 'user',
+                                    status: 'active',
+                                },
+                            });
+                        }
+                    }
+
+                    const existingSubscription = await tx.subscription.findUnique({
+                        where: { userId: syncedUser.id },
+                    });
+
+                    if (!existingSubscription) {
+                        await tx.subscription.create({
+                            data: {
+                                userId: syncedUser.id,
+                                stripeCustomerId: `pending_${syncedUser.id}`,
+                                planCode: 'free',
+                                status: 'active',
+                            },
+                        });
+
+                        await tx.creditLedger.create({
+                            data: {
+                                userId: syncedUser.id,
+                                amount: 50,
+                                entryType: 'promo_grant',
+                                reason: 'Welcome bonus — starter credits',
+                            },
+                        });
+                    }
+
+                    return syncedUser;
                 });
 
-                await tx.creditLedger.create({
-                    data: {
-                        userId: syncedUser.id,
-                        amount: 50,
-                        entryType: 'promo_grant',
-                        reason: 'Welcome bonus — starter credits',
-                    },
-                });
+                break;
+            } catch (error) {
+                const isUniqueConstraintRetry =
+                    error instanceof Prisma.PrismaClientKnownRequestError &&
+                    error.code === 'P2002' &&
+                    attempt < 2;
+
+                if (!isUniqueConstraintRetry) {
+                    throw error;
+                }
             }
+        }
 
-            return syncedUser;
-        });
+        if (!user) {
+            throw new InternalServerErrorException('Failed to sync user');
+        }
 
         return {
             user: {

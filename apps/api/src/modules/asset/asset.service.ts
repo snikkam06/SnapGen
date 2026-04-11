@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Asset, Prisma } from '@prisma/client';
 import { STORAGE_BUCKETS, UPLOAD_LIMITS } from '@snapgen/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -44,7 +44,7 @@ type AssetWithContext = Prisma.AssetGetPayload<{
   };
 }>;
 
-type AssetForSerialization = Prisma.AssetGetPayload<{}> & {
+type AssetForSerialization = Asset & {
   jobAssets?: AssetWithContext['jobAssets'];
 };
 
@@ -56,6 +56,7 @@ export class AssetService {
   ) {}
 
   async findAll(clerkUserId: string, params?: AssetListParams) {
+    // Newly generated assets should appear immediately after job completion.
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -117,7 +118,7 @@ export class AssetService {
     };
   }
 
-  async uploadImage(
+  async uploadAsset(
     clerkUserId: string,
     file: {
       originalname: string;
@@ -125,14 +126,21 @@ export class AssetService {
       size: number;
       buffer: Buffer;
     },
+    metadata?: {
+      durationSec?: string;
+    },
   ) {
     if (!file) {
       throw new BadRequestException('No file provided');
     }
 
     const allowedImageTypes = UPLOAD_LIMITS.allowedImageTypes as readonly string[];
-    if (!allowedImageTypes.includes(file.mimetype)) {
-      throw new BadRequestException('Please upload a JPEG, PNG, or WebP image');
+    const allowedVideoTypes = UPLOAD_LIMITS.allowedVideoTypes as readonly string[];
+    const isImage = allowedImageTypes.includes(file.mimetype);
+    const isVideo = allowedVideoTypes.includes(file.mimetype);
+
+    if (!isImage && !isVideo) {
+      throw new BadRequestException('Please upload a JPEG, PNG, WebP, MP4, or WebM file');
     }
 
     if (file.size > UPLOAD_LIMITS.maxFileSizeBytes) {
@@ -144,18 +152,21 @@ export class AssetService {
 
     const bucket = process.env.R2_BUCKET_UPLOADS || STORAGE_BUCKETS.uploads;
     const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const storageKey = `users/${user.id}/uploads/images/${Date.now()}-${sanitizedFileName}`;
+    const assetDirectory = isVideo ? 'videos' : 'images';
+    const assetKind = isVideo ? 'uploaded-video' : 'uploaded-image';
+    const storageKey = `users/${user.id}/uploads/${assetDirectory}/${Date.now()}-${sanitizedFileName}`;
 
     await this.storageService.saveBuffer(bucket, storageKey, file.buffer, file.mimetype);
 
     const asset = await this.prisma.asset.create({
       data: {
         userId: user.id,
-        kind: 'uploaded-image',
+        kind: assetKind,
         storageBucket: bucket,
         storageKey,
         mimeType: file.mimetype,
         fileSizeBytes: BigInt(file.size),
+        durationSec: this.parseOptionalDurationSec(metadata?.durationSec),
         moderationStatus: 'approved',
         metadataJson: {
           originalFileName: file.originalname,
@@ -165,6 +176,19 @@ export class AssetService {
     });
 
     return this.serializeAsset(asset);
+  }
+
+  private parseOptionalDurationSec(value: string | undefined): Prisma.Decimal | undefined {
+    if (!value?.trim()) {
+      return undefined;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return undefined;
+    }
+
+    return new Prisma.Decimal(parsed.toFixed(2));
   }
 
   async remove(clerkUserId: string, id: string) {

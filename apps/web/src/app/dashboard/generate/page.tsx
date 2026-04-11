@@ -46,6 +46,9 @@ const aspectRatios = [
   { value: '9:16', label: '9:16', width: 'w-5', height: 'h-8' },
 ];
 
+const JOB_STATUS_FALLBACK_POLL_MS = 5000;
+const JOB_STATUS_TIMEOUT_MS = 15 * 60 * 1000;
+
 type ImageMode = 'text' | 'edit';
 type SourceMode = 'feed' | 'upload';
 
@@ -126,7 +129,7 @@ function GeneratePageContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tokenQuery = useApiToken();
   const queryClient = useQueryClient();
-  const token = tokenQuery.data;
+  const { getToken, isReady, userId } = tokenQuery;
 
   useEffect(() => {
     setActiveJobId(initialJobId);
@@ -154,15 +157,15 @@ function GeneratePageContent() {
   }, [generationMode, numImages]);
 
   const charactersQuery = useQuery({
-    queryKey: ['characters', token],
-    enabled: !!token,
-    queryFn: () => api.getCharacters(token as string) as Promise<Character[]>,
+    queryKey: ['characters', userId],
+    enabled: isReady,
+    queryFn: () => api.getCharacters(getToken) as Promise<Character[]>,
   });
 
   const assetsQuery = useQuery({
-    queryKey: ['assets', token, 'image-sources'],
-    enabled: !!token && imageMode === 'edit',
-    queryFn: () => api.getAssets(token as string, { limit: '60' }) as Promise<AssetsResponse>,
+    queryKey: ['assets', userId, 'image-sources'],
+    enabled: isReady && imageMode === 'edit',
+    queryFn: () => api.getAssets(getToken, { limit: '60' }) as Promise<AssetsResponse>,
   });
 
   const sourceAssets = useMemo(() => {
@@ -199,24 +202,24 @@ function GeneratePageContent() {
       : null;
 
   const jobQuery = useQuery({
-    queryKey: ['job', token, activeJobId],
-    enabled: !!token && !!activeJobId,
+    queryKey: ['job', userId, activeJobId],
+    enabled: isReady && !!activeJobId,
     refetchInterval: (query) => {
       const status = (query.state.data as JobDetail | undefined)?.status;
       if (status === 'completed' || status === 'failed') return false;
-      if (jobStartedAt && Date.now() - jobStartedAt > 5 * 60 * 1000) {
+      if (jobStartedAt && Date.now() - jobStartedAt > JOB_STATUS_TIMEOUT_MS) {
         setJobTimedOut(true);
         return false;
       }
-      return 4000;
+      return JOB_STATUS_FALLBACK_POLL_MS; // SSE is primary; polling covers missed events or webhook delays
     },
-    queryFn: () => api.getJob(token as string, activeJobId as string) as Promise<JobDetail>,
+    queryFn: () => api.getJob(getToken, activeJobId as string) as Promise<JobDetail>,
   });
 
   const uploadSourceMutation = useMutation({
     mutationFn: async (file: File) => {
-      if (!token) throw new Error('Authentication token unavailable');
-      return api.uploadImageAsset(token, file) as Promise<AssetItem>;
+      if (!isReady) throw new Error('Authentication token unavailable');
+      return api.uploadImageAsset(getToken, file) as Promise<AssetItem>;
     },
     onSuccess: async (asset) => {
       setUploadedAsset(asset);
@@ -233,11 +236,11 @@ function GeneratePageContent() {
 
   const generateMutation = useMutation({
     mutationFn: async () => {
-      if (!token) {
+      if (!isReady) {
         throw new Error('Authentication token unavailable');
       }
 
-      return api.generateImage(token, {
+      return api.generateImage(getToken, {
         characterId: selectedCharacterId || undefined,
         mode: generationMode,
         prompt,

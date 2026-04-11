@@ -13,6 +13,7 @@ export class JobService {
   ) {}
 
   async findAll(clerkUserId: string, filters?: { status?: string; jobType?: string }) {
+    // Job state drives active polling/SSE in the UI, so read from primary to avoid replica lag.
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -29,6 +30,8 @@ export class JobService {
     for (const job of jobs) {
       if (job.status === 'queued') {
         void this.generationService.ensureJobProcessing(job.id);
+      } else if (job.status === 'running') {
+        void this.generationService.reconcileRunningJob(job.id);
       }
     }
 
@@ -42,10 +45,11 @@ export class JobService {
   async findOne(clerkUserId: string, id: string) {
     assertUuid(id, 'jobId');
 
+    // Active generation views need the latest status and outputs immediately after completion.
     const user = await this.prisma.user.findUnique({ where: { clerkUserId } });
     if (!user) throw new NotFoundException('User not found');
 
-    const job = await this.prisma.generationJob.findUnique({
+    let job = await this.prisma.generationJob.findUnique({
       where: { id },
       include: {
         jobAssets: {
@@ -59,6 +63,18 @@ export class JobService {
 
     if (job.status === 'queued') {
       void this.generationService.ensureJobProcessing(job.id);
+    } else if (job.status === 'running') {
+      await this.generationService.reconcileRunningJob(job.id);
+      job = await this.prisma.generationJob.findUnique({
+        where: { id },
+        include: {
+          jobAssets: {
+            include: { asset: true },
+          },
+        },
+      });
+
+      if (!job) throw new NotFoundException('Job not found');
     }
 
     return {

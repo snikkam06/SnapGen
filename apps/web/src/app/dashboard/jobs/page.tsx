@@ -23,14 +23,13 @@ interface Job {
 export default function JobsPage() {
   const [filter, setFilter] = useState<JobFilter>('all');
   const tokenQuery = useApiToken();
-  const token = tokenQuery.data;
+  const { getToken, isReady, userId } = tokenQuery;
 
   const jobsQuery = useQuery({
-    queryKey: ['jobs', token, filter],
-    enabled: !!token,
-    refetchInterval: 5000,
+    queryKey: ['jobs', userId, filter],
+    enabled: isReady,
     queryFn: () =>
-      api.getJobs(token as string, filter === 'all' ? undefined : { status: filter }) as Promise<
+      api.getJobs(getToken, filter === 'all' ? undefined : { status: filter }) as Promise<
         Job[]
       >,
   });
