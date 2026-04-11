@@ -194,13 +194,13 @@ const GOOGLE_CHARACTER_REFERENCE_SYSTEM_INSTRUCTION = [
 ].join(' ');
 
 const FAL_AGE_ENFORCEMENT_PREFIX =
-  'IMPORTANT: All subjects MUST be clearly adult women aged 25 or older. Depict mature facial features, fully developed adult bone structure, and adult proportions. Never depict anyone who could be interpreted as under 18.';
+  'All subjects are mature adult women in their late twenties to thirties, with fully developed adult facial features, adult bone structure, and mature adult proportions.';
 
 const FAL_PHOTOREALISTIC_PROMPT_SUFFIX =
   'Photorealistic candid snapshot taken on an iPhone 16 Pro Max, natural skin texture with visible pores and subtle imperfections, realistic smartphone color science and dynamic range, soft natural lighting with gentle shadows, crisp subject focus, tack-sharp eyes and facial details, high micro-detail, realistic skin detail, subtle film grain, raw unedited phone photo straight from the camera roll, no over-smoothing, no plastic skin, no AI artifacts, highly detailed yet casual and imperfect';
 
 const FAL_DEFAULT_NEGATIVE_PROMPT =
-  'child, children, minor, underage, teenager, teen, young girl, young boy, infant, toddler, kid, under 18, petite young, baby face, childlike, youthful face, adolescent, prepubescent, small frame child, schoolgirl, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
+  'youthful face, baby face, soft undeveloped features, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const FAL_STATUS_HANDLE_PREFIX = 'fal-status:';
