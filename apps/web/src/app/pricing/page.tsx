@@ -3,11 +3,10 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Sparkles, Check, ArrowRight } from 'lucide-react';
-import { PLAN_CODES } from '@snapgen/config';
 import { cn } from '@/lib/utils';
 
 const freePlan = {
-    code: PLAN_CODES.FREE,
+    code: 'free',
     name: 'Free',
     price: '$0',
     credits: '50 credits/mo',
@@ -32,7 +31,7 @@ interface PaidPlan {
 
 const paidPlans: PaidPlan[] = [
     {
-        code: PLAN_CODES.BASIC,
+        code: 'basic-monthly',
         name: 'Basic',
         monthlyPrice: '$17',
         yearlyPrice: '$120',
@@ -47,7 +46,7 @@ const paidPlans: PaidPlan[] = [
         ],
     },
     {
-        code: PLAN_CODES.CREATOR,
+        code: 'creator-monthly',
         name: 'Creator',
         monthlyPrice: '$32',
         yearlyPrice: '$180',
@@ -63,7 +62,7 @@ const paidPlans: PaidPlan[] = [
         ],
     },
     {
-        code: PLAN_CODES.PRO,
+        code: 'pro-monthly',
         name: 'Pro',
         monthlyPrice: '$75',
         yearlyPrice: '$360',
@@ -80,7 +79,7 @@ const paidPlans: PaidPlan[] = [
         ],
     },
     {
-        code: PLAN_CODES.BUSINESS,
+        code: 'business-monthly',
         name: 'Business',
         monthlyPrice: '$170',
         yearlyPrice: '$800',
