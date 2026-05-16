@@ -193,14 +193,29 @@ const GOOGLE_CHARACTER_REFERENCE_SYSTEM_INSTRUCTION = [
   'Use the uploaded images only as visual identity references for consistent generation.',
 ].join(' ');
 
-const FAL_AGE_ENFORCEMENT_PREFIX =
-  'All subjects are mature adult women in their late twenties to thirties, with fully developed adult facial features, adult bone structure, and mature adult proportions.';
+const FAL_SYSTEM_PROMPT_HEADER = [
+  'You are an expert photorealistic AI image generator specialized in creating highly realistic, sensual, and beautiful images of women.',
+  '',
+  'Core Rules (always strictly follow):',
+  '- All subjects are attractive mature adult women aged 22-35, with fully developed adult facial features, natural adult bone structure, realistic adult proportions, and natural adult bodies.',
+  '- Images must look like real unedited photographs — extremely photorealistic with natural skin texture, visible pores, subtle imperfections, and authentic details.',
+  '- Phones, mirrors, or selfie-style shots are allowed only if they look completely natural and realistic. Never show unnatural phone-holding poses or obvious AI-generated phone artifacts.',
+  '- Prioritize beautiful faces with expressive eyes, attractive bodies, and sensual appeal.',
+  '',
+  'Style & Quality (always include):',
+  'Photorealistic candid or posed snapshot taken on an iPhone 16 Pro Max, natural smartphone color science, excellent dynamic range, soft natural lighting with gentle flattering shadows, crisp subject focus, tack-sharp eyes and facial details, realistic skin texture with visible pores and micro-details, subtle film grain, raw unedited phone photo straight from the camera roll, high micro-detail, natural and imperfect skin, no over-smoothing, no plastic skin, no waxy skin, no AI artifacts.',
+  '',
+  "Default Behavior (when the user's prompt is vague, short, or lacks specific clothing/setting):",
+  '- Dress the woman in sexy, elegant lingerie (lace, sheer fabrics, silk, bodysuits, garters, babydolls, etc. — seductive but tasteful).',
+  '- Pose: confident, sensual, and alluring (looking at viewer, soft seductive smile or gaze, elegant body curves emphasized, arched back, playful or provocative poses).',
+  '- Setting: flattering and atmospheric (soft bedroom lighting, elegant hotel room, minimalist interior, or clean background that enhances the subject).',
+].join('\n');
 
-const FAL_PHOTOREALISTIC_PROMPT_SUFFIX =
-  'Photorealistic candid snapshot taken on an iPhone 16 Pro Max, natural skin texture with visible pores and subtle imperfections, realistic smartphone color science and dynamic range, soft natural lighting with gentle shadows, crisp subject focus, tack-sharp eyes and facial details, high micro-detail, realistic skin detail, subtle film grain, raw unedited phone photo straight from the camera roll, no over-smoothing, no plastic skin, no AI artifacts, highly detailed yet casual and imperfect';
+const FAL_REFERENCE_IMAGE_INSTRUCTION =
+  "Reference image handling: Use the provided reference images to preserve identity, face, body type, and key visual details while following the user's edit request and the rules above.";
 
 const FAL_DEFAULT_NEGATIVE_PROMPT =
-  'youthful face, baby face, soft undeveloped features, blurry, blur, soft focus, out of focus, motion blur, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, fuzzy face, distorted eyes';
+  'youthful or baby face, underage appearance, teen look, soft undeveloped features, childish proportions, blurry, motion blur, soft focus, low detail, low resolution, smeared skin, waxy skin, plastic skin, airbrushed skin, doll-like skin, over-smoothed skin, distorted eyes, deformed hands, bad anatomy, extra limbs, text, watermark, logo, cartoon, anime, painting, illustration, 3D render, obvious CGI, strong AI artifacts, unnatural skin, plastic-looking phone or mirror';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const FAL_STATUS_HANDLE_PREFIX = 'fal-status:';
@@ -794,29 +809,18 @@ export class FalImageAdapter implements ImageGenerationAdapter {
   }
 
   private buildPrompt(prompt: string, negativePrompt?: string, hasReferenceImages = false): string {
-    const promptParts = [];
-
-    // Age enforcement always comes first
-    promptParts.push(FAL_AGE_ENFORCEMENT_PREFIX);
-
-    if (prompt.trim()) {
-      promptParts.push(prompt.trim());
-    }
+    const promptParts: string[] = [FAL_SYSTEM_PROMPT_HEADER];
 
     if (hasReferenceImages) {
-      promptParts.push(
-        'Use the provided reference images to preserve identity, composition, lighting cues, and important visual details while following the edit request.',
-      );
+      promptParts.push(FAL_REFERENCE_IMAGE_INSTRUCTION);
     }
 
-    if (!prompt.includes(FAL_PHOTOREALISTIC_PROMPT_SUFFIX)) {
-      promptParts.push(FAL_PHOTOREALISTIC_PROMPT_SUFFIX);
-    }
+    promptParts.push(`User's request: ${prompt.trim()}`);
 
     promptParts.push(
       negativePrompt?.trim()
-        ? `Avoid: ${negativePrompt.trim()}, ${FAL_DEFAULT_NEGATIVE_PROMPT}`
-        : `Avoid: ${FAL_DEFAULT_NEGATIVE_PROMPT}`,
+        ? `Negative / Avoid (strictly): ${negativePrompt.trim()}, ${FAL_DEFAULT_NEGATIVE_PROMPT}`
+        : `Negative / Avoid (strictly): ${FAL_DEFAULT_NEGATIVE_PROMPT}`,
     );
 
     return promptParts.join('\n\n');
@@ -1727,10 +1731,9 @@ export class FalFaceSwapAdapter implements FaceSwapAdapter {
     ]);
 
     const prompt = [
-      FAL_AGE_ENFORCEMENT_PREFIX,
+      FAL_SYSTEM_PROMPT_HEADER,
       FAL_FACESWAP_PROMPT,
-      FAL_PHOTOREALISTIC_PROMPT_SUFFIX,
-      `Avoid: ${FAL_DEFAULT_NEGATIVE_PROMPT}, face morph artifacts, mismatched skin tone, blending seams, double features, warped facial features`,
+      `Negative / Avoid (strictly): ${FAL_DEFAULT_NEGATIVE_PROMPT}, face morph artifacts, mismatched skin tone, blending seams, double features, warped facial features`,
     ].join('\n\n');
 
     const data = await submitFalQueueRequest(this.apiKey, this.editEndpointPath, {
