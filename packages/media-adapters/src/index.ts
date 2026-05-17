@@ -247,6 +247,22 @@ const FAL_OPTIMIZED_IMAGE_CONTENT_TYPE = 'image/webp';
 const FAL_IMAGE_QUALITY_STEPS = [90, 84, 78, 72, 66];
 const FAL_IMAGE_MAX_DIMENSION_STEPS = [3850, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 768];
 
+const FAL_SAFETY_MESSAGE = 'safety trigger, please try a different prompt';
+
+function isFalSafetyError(status: number, body: string): boolean {
+  if (status !== 422 && status !== 400) {
+    return false;
+  }
+  return /content_policy_violation|partner_validation_failed|content checker|safety/i.test(body);
+}
+
+function throwFalError(prefix: string, status: number, body: string): never {
+  if (isFalSafetyError(status, body)) {
+    throw new Error(FAL_SAFETY_MESSAGE);
+  }
+  throw new Error(`${prefix}: ${status} - ${body}`);
+}
+
 function ensureFalApiKey(apiKey: string, capability: string): void {
   if (!apiKey) {
     throw new Error(`FAL_API_KEY is required for ${capability}`);
@@ -376,7 +392,7 @@ async function submitFalQueueRequest(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Fal API error: ${response.status} - ${error}`);
+    throwFalError('Fal API error', response.status, error);
   }
 
   return (await response.json()) as FalCreateJobResponse;
@@ -526,7 +542,7 @@ async function getFalQueueStatus(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Fal status error: ${response.status} - ${error}`);
+    throwFalError('Fal status error', response.status, error);
   }
 
   return (await response.json()) as FalQueueStatusResponse;
@@ -550,7 +566,7 @@ async function getFalQueueResult<TResponse>(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Fal result error: ${response.status} - ${error}`);
+    throwFalError('Fal result error', response.status, error);
   }
 
   return (await response.json()) as FalQueueResultResponse<TResponse>;
@@ -761,10 +777,16 @@ export class FalImageAdapter implements ImageGenerationAdapter {
         })) ?? [];
 
       if (!outputs.length) {
+        const rawMessage =
+          result.error || status.error || logSummary || 'Fal image job returned no outputs';
+        const errorMessage = /content_policy_violation|partner_validation_failed|content checker/i.test(
+          rawMessage,
+        )
+          ? FAL_SAFETY_MESSAGE
+          : rawMessage;
         return {
           status: 'failed',
-          errorMessage:
-            result.error || status.error || logSummary || 'Fal image job returned no outputs',
+          errorMessage,
         };
       }
 
