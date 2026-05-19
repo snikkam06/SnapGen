@@ -1,0 +1,17 @@
+{
+  "name": "@snapgen/stress-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed": "node ../../scripts/with-database-url.mjs node seed-stress-users.mjs",
+    "baseline": "k6 run scenarios/baseline.js",
+    "read-heavy": "k6 run scenarios/read-heavy.js",
+    "generation-storm": "k6 run scenarios/generation-storm.js",
+    "mixed": "k6 run scenarios/mixed.js",
+    "spike": "k6 run scenarios/spike.js"
+  },
+  "dependencies": {
+    "@snapgen/db": "workspace:*"
+  }
+}

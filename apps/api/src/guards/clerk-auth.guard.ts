@@ -27,6 +27,21 @@ export class ClerkAuthGuard implements CanActivate {
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const request = context.switchToHttp().getRequest();
+
+        const bypassToken = process.env.STRESS_TEST_BYPASS_TOKEN;
+        if (bypassToken) {
+            const providedToken = request.headers['x-stress-test-token'];
+            const stressUserId = request.headers['x-stress-test-user-id'];
+            if (providedToken === bypassToken && typeof stressUserId === 'string' && stressUserId.length > 0) {
+                request.user = {
+                    clerkUserId: stressUserId,
+                    email: request.headers['x-stress-test-user-email'] as string | undefined,
+                    emailVerified: true,
+                };
+                return true;
+            }
+        }
+
         const authHeader = request.headers['authorization'];
 
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
