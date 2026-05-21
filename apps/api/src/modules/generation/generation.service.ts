@@ -274,10 +274,14 @@ export class GenerationService {
       }
     }
 
+    const requestedDurationSec = Number(data.settings?.durationSec);
+    const standardDurationSec = requestedDurationSec === 10 ? 10 : 5;
     const totalCost =
       workflow === 'motion-control'
         ? this.calculateMotionControlCredits(referenceVideoDurationSec, keepOriginalSound)
-        : CREDIT_COSTS.video;
+        : standardDurationSec === 10
+          ? CREDIT_COSTS.video10s
+          : CREDIT_COSTS.video;
 
     const job = await this.prisma.withSerializableTransaction(async (tx) => {
       await this.lockUserCredits(tx, user.id);
