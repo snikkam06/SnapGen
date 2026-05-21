@@ -549,7 +549,7 @@ function VideoPageContent() {
         <h1 className="page-title">Generate Video</h1>
         <p className="page-description">
           Create standard text or image-driven clips, or transfer motion from a reference video
-          onto a source image with Kling Motion Control.
+          onto a source image with Motion Control.
         </p>
       </div>
 
@@ -735,7 +735,7 @@ function VideoPageContent() {
                       : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
                   )}
                 >
-                  Kling Motion Control
+                  Motion Control
                 </button>
               </div>
             </div>
@@ -1303,7 +1303,7 @@ function VideoPageContent() {
                       ? motionControlCredits
                         ? `${motionControlCredits} credits`
                         : '...'
-                      : '25 credits'
+                      : `${durationSec === 10 ? 50 : 25} credits`
                   })`}
                 </>
               )}

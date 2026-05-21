@@ -11,6 +11,7 @@ export const CREDIT_COSTS = {
     image: 20,            // regular generation
     'faceswap-image': 30, // enhanced generation
     video: 25,            // video 5 sec
+    video10s: 50,         // video 10 sec
     'faceswap-video': 50, // video 10 sec
 
     training: 25,
